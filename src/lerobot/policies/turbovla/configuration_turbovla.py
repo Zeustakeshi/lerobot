@@ -55,6 +55,8 @@ class TurboVLAConfig(PreTrainedConfig):
     image_size: tuple[int, int] = (256, 256)
     image_crop_size: tuple[int, int] | None = None
     image_interpolation: str = "bilinear"
+    image_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
+    image_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
     state_dim: int = 8
     action_dim: int = 7
     chunk_size: int = 12
@@ -98,7 +100,7 @@ class TurboVLAConfig(PreTrainedConfig):
         default_factory=lambda: {
             "VISUAL": NormalizationMode.IDENTITY,
             "STATE": NormalizationMode.MEAN_STD,
-            "ACTION": NormalizationMode.MEAN_STD,
+            "ACTION": NormalizationMode.MIN_MAX,
         }
     )
 
