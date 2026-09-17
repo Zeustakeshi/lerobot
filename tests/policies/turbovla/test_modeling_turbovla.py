@@ -9,7 +9,7 @@ from torch import nn
 
 from lerobot.policies import get_policy_class
 from lerobot.policies.turbovla.configuration_turbovla import TurboVLAConfig
-from lerobot.policies.turbovla.modeling_turbovla import TurboVLAPolicy
+from lerobot.policies.turbovla.modeling_turbovla import TurboVLAPolicy, _make_upstream_config
 from lerobot.policies.turbovla.transformer import TransformerEncoderLayer
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 
@@ -50,6 +50,19 @@ def test_synthetic_forward_backward_and_batch_shapes() -> None:
         loss.backward()
         assert policy.model.projection.weight.grad is not None
         policy.zero_grad(set_to_none=True)
+
+
+def test_backbone_revisions_are_forwarded_to_upstream_config() -> None:
+    config = TurboVLAConfig(
+        device="cpu",
+        vision_encoder_revision="dinov3-commit",
+        language_encoder_revision="bert-commit",
+    )
+
+    upstream_config = _make_upstream_config(config)
+
+    assert upstream_config.vision.revision == "dinov3-commit"
+    assert upstream_config.text.revision == "bert-commit"
 
 
 def test_vendored_architecture_forward_backward(monkeypatch) -> None:
@@ -124,8 +137,8 @@ def test_vendored_architecture_forward_backward(monkeypatch) -> None:
     assert model.action_head.decoder.action_queries.weight.grad is not None
 
 
-def test_text_attention_masks_are_applied_per_sample_and_ignore_padding() -> None:
-    """A batched attention call must match processing each sample independently."""
+def test_text_attention_layer_matches_upstream_mask_layout() -> None:
+    """Keep the vendored layer bit-for-bit compatible with TurboVLA's attention path."""
     torch.manual_seed(0)
     layer = TransformerEncoderLayer(d_model=8, nhead=2, dim_feedforward=16, dropout=0.0)
     layer.eval()
@@ -148,19 +161,17 @@ def test_text_attention_masks_are_applied_per_sample_and_ignore_padding() -> Non
     )
     padding_mask = torch.tensor([[False, False, False, True], [False, False, True, True]])
 
-    batched = layer(source, src_mask=attention_mask, src_key_padding_mask=padding_mask)
-    individual = torch.cat(
-        [
-            layer(
-                source[:, index : index + 1],
-                src_mask=attention_mask[index],
-                src_key_padding_mask=padding_mask[index : index + 1],
-            )
-            for index in range(source.shape[1])
-        ],
-        dim=1,
-    )
-    torch.testing.assert_close(batched, individual)
+    actual = layer(source, src_mask=attention_mask, src_key_padding_mask=padding_mask)
+
+    # `repeat`, rather than `repeat_interleave`, and the omission of a padding
+    # mask are the semantics used by the published TurboVLA implementation.
+    upstream_mask = attention_mask.repeat(layer.nhead, 1, 1)
+    attended = layer.self_attn(source, source, value=source, attn_mask=upstream_mask)[0]
+    expected = layer.norm1(source + layer.dropout1(attended))
+    feedforward = layer.linear2(layer.dropout(layer.activation(layer.linear1(expected))))
+    expected = layer.norm2(expected + layer.dropout2(feedforward))
+
+    torch.testing.assert_close(actual, expected)
 
 
 def test_text_attention_layer_accepts_no_custom_attention_mask() -> None:

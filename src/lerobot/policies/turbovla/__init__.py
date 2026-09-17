@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TurboVLA policy integration.
-
-The modeling module is intentionally not imported here so importing LeRobot remains
-lightweight and cannot initialize CUDA or download backbone checkpoints.
-"""
-
 from .configuration_turbovla import TurboVLAConfig
+from .modeling_turbovla import TurboVLAPolicy
 from .processor_turbovla import make_turbovla_pre_post_processors
 
-__all__ = ["TurboVLAConfig", "make_turbovla_pre_post_processors"]
+__all__ = ["TurboVLAConfig", "TurboVLAPolicy", "make_turbovla_pre_post_processors"]

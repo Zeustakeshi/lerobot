@@ -27,21 +27,28 @@ def _make_upstream_config(config: TurboVLAConfig):
         VisionEncoderConfig,
     )
 
+    encoder_attention_implementation = (
+        None if config.attention_implementation == "manual" else config.attention_implementation
+    )
     return UpstreamTurboVLAConfig(
         text=TextEncoderConfig(
             model_name_or_path=config.language_encoder_id,
+            revision=config.language_encoder_revision,
             max_length=config.max_text_length,
+            padding_length=config.text_padding_length,
+            padding_length_by_instruction=config.text_padding_length_by_instruction,
             frozen=config.freeze_text_encoder,
             local_files_only=config.local_files_only,
-            attention_implementation=config.attention_implementation,
+            attention_implementation=encoder_attention_implementation,
         ),
         vision=VisionEncoderConfig(
             model_name_or_path=config.vision_encoder_id,
+            revision=config.vision_encoder_revision,
             image_size=config.image_size[0],
             num_views=len(config.image_keys),
             frozen=config.freeze_vision_encoder,
             local_files_only=config.local_files_only,
-            attention_implementation=config.attention_implementation,
+            attention_implementation=encoder_attention_implementation,
             compute_precision="bf16_autocast" if config.precision == "bfloat16" else "fp32",
             dropout=config.dropout,
         ),
@@ -54,7 +61,7 @@ def _make_upstream_config(config: TurboVLAConfig):
             text_dropout=config.text_dropout,
             fusion_dropout=config.fusion_dropout,
             fusion_droppath=config.fusion_droppath,
-            attention_backend=config.attention_implementation,
+            attention_backend="manual" if config.attention_implementation == "manual" else "sdpa",
         ),
         action=ActionHeadConfig(
             action_dim=config.action_dim,

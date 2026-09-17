@@ -6,6 +6,8 @@
 # Modified for TurboVLA.
 # ------------------------------------------------------------------------
 
+import inspect
+
 import torch
 from torch import Tensor, nn
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAttentions
@@ -23,7 +25,19 @@ class BertModelWarper(nn.Module):
 
         self.get_extended_attention_mask = bert_model.get_extended_attention_mask
         self.invert_attention_mask = bert_model.invert_attention_mask
-        self.get_head_mask = bert_model.get_head_mask
+        self.get_head_mask = getattr(bert_model, "get_head_mask", self._fallback_get_head_mask)
+
+    def _fallback_get_head_mask(self, head_mask, num_hidden_layers: int):
+        """Compatibility with Transformers versions that removed ``get_head_mask``."""
+        if head_mask is None:
+            return [None] * num_hidden_layers
+        if head_mask.dim() == 1:
+            head_mask = head_mask[None, :, None, None, None].expand(num_hidden_layers, -1, -1, -1, -1)
+        elif head_mask.dim() == 2:
+            head_mask = head_mask[:, None, :, None, None]
+        if head_mask.dim() != 5:
+            raise ValueError("head_mask must have dimension 1, 2, or 5")
+        return head_mask.to(dtype=self.embeddings.word_embeddings.weight.dtype)
 
     def forward(
         self,
@@ -97,8 +111,13 @@ class BertModelWarper(nn.Module):
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
+        mask_kwargs = {}
+        if "dtype" in inspect.signature(self.get_extended_attention_mask).parameters:
+            mask_kwargs["dtype"] = self.embeddings.word_embeddings.weight.dtype
+        else:
+            mask_kwargs["device"] = device
         extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(
-            attention_mask, input_shape, device
+            attention_mask, input_shape, **mask_kwargs
         )
 
         # If a 2D or 3D attention mask is provided for the cross-attention

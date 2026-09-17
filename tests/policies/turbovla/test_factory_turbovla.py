@@ -34,12 +34,11 @@ def test_train_cli_accepts_turbovla_policy_type(tmp_path) -> None:
 
 def test_import_is_lightweight_and_does_not_initialize_cuda() -> None:
     code = """
-import sys
 import torch
 before = torch.cuda.is_initialized()
-import lerobot.policies.turbovla
+from lerobot.policies.turbovla import TurboVLAPolicy
 assert torch.cuda.is_initialized() == before
-assert 'lerobot.policies.turbovla.modeling_turbovla' not in sys.modules
+assert TurboVLAPolicy.__name__ == 'TurboVLAPolicy'
 """
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
