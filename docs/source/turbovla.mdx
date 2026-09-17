@@ -1,8 +1,10 @@
 # TurboVLA (experimental)
 
 TurboVLA is available as a native, experimental LeRobot policy type. The native
-model and serializable data processors support the LIBERO data contract; checkpoint
-conversion and benchmark reproduction remain experimental work.
+model and serializable data processors support the LIBERO data contract. The released
+LIBERO checkpoint has strict conversion/loading and fixed-input raw-action parity
+coverage; full benchmark reproduction remains experimental work. RoboTwin is not yet
+a validated release path.
 
 ```bash
 pip install "lerobot[turbovla]"
@@ -12,6 +14,58 @@ lerobot-train --policy.type=turbovla --dataset.repo_id=<org/dataset>
 The dataset must provide the exact TurboVLA state mean/std, action min/max statistics,
 and ordered camera features. Runtime inference supplies a non-empty `task` string. See the
 [TurboVLA policy page](./policy_turbovla_README.md) for the full processor contract.
+
+## LIBERO evaluation contract
+
+TurboVLA LIBERO checkpoints are evaluated through the standard `lerobot-eval`
+entry point. A full comparable run uses the four official suites, 50 trials per
+task, seed 7, two cameras (`agentview_image`, `robot0_eye_in_hand_image`),
+8-D flattened state
+(`eef_pos`, axis-angle orientation, gripper qpos), 7-D relative actions, bf16/AMP,
+and TurboVLA's 12-action open-loop chunking. Smoke runs with fewer trials still run,
+but `lerobot-eval` logs why they are not benchmark-comparable and writes
+`turbovla_libero_report.json` next to `eval_info.json`.
+
+Use the unified LIBERO checkpoint and its accompanying `libero_all4_stats.json`
+from a verifiable upstream release. Record the source URL or release identifier,
+immutable revision when available, and SHA256 values for both files before
+conversion. The checkpoint does not embed this provenance, so do not infer it
+from a filename alone.
+
+Benchmark values are intentionally blank until a full GPU run completes. Fill
+these fields only from a run that satisfies the contract above:
+
+| Field | Value |
+| --- | --- |
+| Source checkpoint SHA256 | |
+| Source stats SHA256 | |
+| Converted checkpoint revision | |
+| LeRobot revision | |
+| TurboVLA upstream revision | |
+| LIBERO revision | |
+| GPU name / driver / CUDA / PyTorch | |
+| Precision | |
+| Seed | |
+| Suites and trials per task | |
+| Per-task success rates | |
+| Per-suite success rates | |
+| Aggregate success rate and 95% CI | |
+| Model-only latency mean / median / p95 | |
+| End-to-end latency mean / median / p95 | |
+| Peak allocated / reserved VRAM | |
+
+```bash
+lerobot-eval \
+  --policy.path=<converted-turbovla-libero-checkpoint> \
+  --env.type=libero \
+  --env.task=libero_spatial,libero_object,libero_goal,libero_10 \
+  --eval.n_episodes=50 \
+  --eval.use_async_envs=true \
+  --policy.device=cuda \
+  --policy.use_amp=true \
+  --seed=7 \
+  --output_dir=outputs/eval/turbovla_libero
+```
 
 > [!WARNING]
 > Released TurboVLA weights target simulation. This integration does not claim

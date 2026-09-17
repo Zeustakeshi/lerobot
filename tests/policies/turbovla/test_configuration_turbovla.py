@@ -21,6 +21,7 @@ def test_libero_and_robotwin_presets_are_complete() -> None:
     libero.validate_features()
     robotwin.validate_features()
     assert libero.image_keys == LIBERO_IMAGE_KEYS
+    assert not libero.local_files_only
     assert (libero.state_dim, libero.action_dim, libero.chunk_size) == (8, 7, 12)
     assert robotwin.image_keys == ROBOTWIN_IMAGE_KEYS
     assert (robotwin.state_dim, robotwin.action_dim, robotwin.chunk_size) == (14, 14, 50)

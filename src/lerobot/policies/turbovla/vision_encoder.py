@@ -12,6 +12,7 @@ from .configuration_upstream import VisionEncoderConfig
 def _load_pretrained_model(config: VisionEncoderConfig):
     kwargs = {
         "local_files_only": config.local_files_only,
+        "revision": config.revision,
         "trust_remote_code": False,
     }
     if config.attention_implementation:

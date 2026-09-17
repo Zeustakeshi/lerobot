@@ -110,28 +110,16 @@ class TransformerEncoderLayer(nn.Module):
         # repeat attn mask
         if src_mask is not None and src_mask.dim() == 3 and src_mask.shape[0] == src.shape[1]:
             # bs, num_q, num_k
-            # MultiheadAttention expects masks ordered as
-            # [batch_0/head_0, ..., batch_0/head_n, batch_1/head_0, ...].
-            src_mask = src_mask.repeat_interleave(self.nhead, dim=0)
+            src_mask = src_mask.repeat(self.nhead, 1, 1)
 
         q = k = self.with_pos_embed(src, pos)
 
-        src2 = self.self_attn(
-            q,
-            k,
-            value=src,
-            attn_mask=src_mask,
-            key_padding_mask=src_key_padding_mask,
-        )[0]
+        src2 = self.self_attn(q, k, value=src, attn_mask=src_mask)[0]
         src = src + self.dropout1(src2)
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
         src = src + self.dropout2(src2)
         src = self.norm2(src)
-        if src_key_padding_mask is not None:
-            # Fully masked padding queries may produce NaNs in attention. They are
-            # not semantic tokens and must not leak into the downstream decoder.
-            src = src.masked_fill(src_key_padding_mask.T.unsqueeze(-1), 0.0)
         return src
 
 

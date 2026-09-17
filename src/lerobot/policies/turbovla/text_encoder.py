@@ -15,6 +15,7 @@ from .configuration_upstream import TextEncoderConfig
 def _load_pretrained_model(config: TextEncoderConfig):
     kwargs = {
         "local_files_only": config.local_files_only,
+        "revision": config.revision,
         "trust_remote_code": False,
     }
     if config.attention_implementation:
@@ -51,6 +52,7 @@ class TurboVLATextEncoder(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(
             config.model_name_or_path,
             local_files_only=config.local_files_only,
+            revision=config.revision,
             use_fast=True,
         )
         bert = _load_pretrained_model(config)
