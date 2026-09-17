@@ -3482,6 +3482,7 @@ transformers-dep = [
     { name = "transformers" },
 ]
 turbovla = [
+    { name = "timm" },
     { name = "transformers" },
 ]
 unitree-g1 = [
@@ -3683,6 +3684,7 @@ requires-dist = [
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'vla-jepa'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'wallx'" },
     { name = "lerobot", extras = ["transformers-dep"], marker = "extra == 'xvla'" },
+    { name = "lerobot", extras = ["timm-dep"], marker = "extra == 'turbovla'" },
     { name = "lerobot", extras = ["turbovla"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["video-benchmark"], marker = "extra == 'all'" },
     { name = "lerobot", extras = ["viz"], marker = "extra == 'all'" },
