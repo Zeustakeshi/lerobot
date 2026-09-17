@@ -7,6 +7,7 @@ from typing import Any, Mapping
 @dataclass
 class TextEncoderConfig:
     model_name_or_path: str = "bert-base-uncased"
+    revision: str | None = None
     max_length: int = 256
     padding_length: int | None = None
     padding_length_by_instruction: dict[str, int] = field(default_factory=dict)
@@ -14,19 +15,20 @@ class TextEncoderConfig:
     frozen: bool = True
     force_eval_when_frozen: bool = True
     zero_padded_tokens: bool = False
-    local_files_only: bool = True
+    local_files_only: bool = False
     attention_implementation: str | None = None
 
 
 @dataclass
 class VisionEncoderConfig:
     model_name_or_path: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+    revision: str | None = None
     image_size: int = 256
     num_views: int = 2
     position_embedding: str = "view"
     encode_views_separately: bool = True
     frozen: bool = False
-    local_files_only: bool = True
+    local_files_only: bool = False
     attention_implementation: str | None = None
     compute_precision: str = "bf16_autocast"
     position_init_std: float = 0.01

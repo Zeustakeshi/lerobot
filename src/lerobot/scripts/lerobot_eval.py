@@ -759,6 +759,16 @@ def eval_main(cfg: EvalPipelineConfig):
 
     logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
 
+    turbovla_libero_report = None
+    if getattr(cfg.policy, "type", None) == "turbovla" and getattr(cfg.env, "type", None) == "libero":
+        from lerobot.policies.turbovla.libero_benchmark import check_turbovla_libero_eval_contract
+
+        contract_check = check_turbovla_libero_eval_contract(cfg)
+        if not contract_check.ok:
+            raise ValueError("Invalid TurboVLA LIBERO eval contract: " + "; ".join(contract_check.errors))
+        for warning in contract_check.warnings:
+            logger.warning("TurboVLA LIBERO eval is not benchmark-comparable: %s", warning)
+
     logging.info(f"Making environment (batch_size={cfg.eval.batch_size}, async={cfg.eval.use_async_envs}).")
     envs = make_env(
         cfg.env,
@@ -831,12 +841,19 @@ def eval_main(cfg: EvalPipelineConfig):
         for task_group, task_group_info in info.items():
             logger.info(f"\nAggregated Metrics for {task_group}:")
             logger.info(task_group_info)
+        if getattr(cfg.policy, "type", None) == "turbovla" and getattr(cfg.env, "type", None) == "libero":
+            from lerobot.policies.turbovla.libero_benchmark import summarize_turbovla_libero_results
+
+            turbovla_libero_report = summarize_turbovla_libero_results(info)
     # Close all vec envs
     close_envs(envs)
 
     # Save info
     with open(Path(cfg.output_dir) / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
+    if turbovla_libero_report is not None:
+        with open(Path(cfg.output_dir) / "turbovla_libero_report.json", "w") as f:
+            json.dump(turbovla_libero_report, f, indent=2)
 
     logging.info("End of eval")
 

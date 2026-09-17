@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configuration contract for the native TurboVLA policy integration."""
+"""Configuration for the native TurboVLA policy integration."""
 
 from dataclasses import dataclass, field
 from typing import Literal
@@ -45,9 +45,8 @@ def _libero_input_features() -> dict[str, PolicyFeature]:
 class TurboVLAConfig(PreTrainedConfig):
     """Serializable model-construction contract for TurboVLA.
 
-    Phase 2 establishes the native LeRobot integration and a LIBERO tracer. The
-    full neural network and benchmark-parity processors are implemented in later
-    phases; no benchmark result is implied by this configuration alone.
+    The configuration captures the released LIBERO and RoboTwin schemas, but no
+    benchmark result is implied by constructing this configuration alone.
     """
 
     variant: TurboVLAVariant = "libero"
@@ -67,7 +66,7 @@ class TurboVLAConfig(PreTrainedConfig):
     language_encoder_id: str = "google-bert/bert-base-uncased"
     language_encoder_revision: str | None = None
     precision: Literal["bfloat16", "float32"] = "bfloat16"
-    attention_implementation: Literal["sdpa", "eager"] = "sdpa"
+    attention_implementation: Literal["manual", "sdpa", "eager"] = "manual"
 
     hidden_dim: int = 256
     num_attention_heads: int = 8
@@ -84,8 +83,10 @@ class TurboVLAConfig(PreTrainedConfig):
     text_dropout: float = 0.0
     freeze_text_encoder: bool = True
     freeze_vision_encoder: bool = False
-    local_files_only: bool = True
+    local_files_only: bool = False
     max_text_length: int = 256
+    text_padding_length: int | None = None
+    text_padding_length_by_instruction: dict[str, int] = field(default_factory=dict)
 
     statistics_id: str = "turbovla/libero-four-suite-no-noops"
     statistics_revision: str | None = None
@@ -131,7 +132,7 @@ class TurboVLAConfig(PreTrainedConfig):
 
     @classmethod
     def robotwin(cls, **kwargs: object) -> "TurboVLAConfig":
-        """Build the validated RoboTwin schema (model execution lands after Phase 2)."""
+        """Build the validated RoboTwin schema."""
         defaults: dict[str, object] = {
             "variant": "robotwin",
             "image_keys": ROBOTWIN_IMAGE_KEYS,

@@ -4,10 +4,13 @@ TurboVLA is a vision-language-action policy for efficient robot manipulation. Th
 official implementation is maintained in the [TurboVLA repository](https://github.com/H-EmbodVis/TurboVLA).
 
 > [!WARNING]
-> This LeRobot integration is experimental. Native model execution and the LIBERO
-> processor contract are implemented, but converted-checkpoint numerical parity and
-> published benchmark reproduction are not complete. Official released weights
-> are simulation-trained. Do not treat them as real-robot safety or robustness claims.
+> This LeRobot integration is experimental. Strict conversion, strict loading, and
+> fixed-input raw-action parity against the released LIBERO checkpoint are verified;
+> published benchmark reproduction is not complete. LIBERO is the only release
+> path validated by this integration. The RoboTwin configuration and converter
+> path are not yet validated against a released RoboTwin checkpoint. Official
+> released weights are simulation-trained. Do not treat them as real-robot safety
+> or robustness claims.
 
 ## Installation
 
@@ -25,12 +28,17 @@ pip install "lerobot[turbovla,libero]"
 
 No standalone `lerobot_policy_turbovla` package is required.
 
+On first model construction, LeRobot downloads the configured DINOv3 and BERT
+backbones from Hugging Face. DINOv3 requires accepting Meta's access terms. Set
+`--policy.local_files_only=true` only after those artifacts have been cached, for
+offline execution.
+
 ## Data and processor contract
 
 The policy is registered as `turbovla`, so standard LeRobot configuration parsing
-accepts `--policy.type=turbovla`. The LIBERO preset uses two ordered cameras, 7-D
-state/actions, chunks of 12, DINOv3 ViT-B, and BERT base. The RoboTwin schema uses
-three ordered cameras, 14-D state/actions, chunks of 50, and DINOv3 ViT-L.
+accepts `--policy.type=turbovla`. The validated LIBERO preset uses two ordered
+cameras, 7-D state/actions, chunks of 12, DINOv3 ViT-B, and BERT base. A RoboTwin
+schema is present for future compatibility, but is not a supported release path yet.
 
 Camera tensors are ordered exactly as configured. They must contain RGB images in
 channel-first `C,H,W` or batched `B,C,H,W` layout. `uint8` pixels are converted from
@@ -52,13 +60,70 @@ size and exposes it to the policy as `observation.language`. Text is not rewritt
 TurboVLA's BERT base uncased tokenizer applies truncation at the configured maximum
 length inside the text encoder. Empty or missing instructions fail explicitly.
 
-No success-rate, latency, VRAM, or converted-checkpoint numerical-parity result is
-claimed yet.
+No success-rate, latency, or VRAM benchmark result is claimed yet. Fixed-input
+conversion/loading parity is covered by tests; benchmark reproduction must be run
+separately on a GPU LIBERO setup before filling model-card metrics.
+
+## Benchmark fields to fill later
+
+Leave these values blank in public artifacts until a full contract-compliant LIBERO
+run has completed:
+
+| Field | Value |
+| --- | --- |
+| Source checkpoint SHA256 | |
+| Source stats SHA256 | |
+| Converted checkpoint revision | |
+| LeRobot revision | |
+| TurboVLA upstream revision | |
+| LIBERO revision | |
+| GPU name / driver / CUDA / PyTorch | |
+| Precision | |
+| Seed | |
+| Suites and trials per task | |
+| Per-task success rates | |
+| Per-suite success rates | |
+| Aggregate success rate and 95% CI | |
+| Model-only latency mean / median / p95 | |
+| End-to-end latency mean / median / p95 | |
+| Peak allocated / reserved VRAM | |
 
 ## References and citation
 
 - [Official TurboVLA source](https://github.com/H-EmbodVis/TurboVLA)
-- [LeRobot integration plan](../../plans/plan.md)
+
+To convert a released upstream checkpoint into a portable LeRobot artifact, use
+the bundled converter. Supply the exact source SHA256, variant, and statistics JSON:
+
+```bash
+lerobot-convert-turbovla \
+  --source-path=<upstream-checkpoint> \
+  --source-kind=<libero-pth|robotwin-ema-safetensors> \
+  --source-url=<upstream-checkpoint-url-or-release-page> \
+  --source-revision=<immutable-upstream-commit> \
+  --checkpoint-license=<source-checkpoint-license> \
+  --variant=<libero|robotwin> \
+  --stats-json=<dataset-statistics.json> \
+  --expected-sha256=<source-checkpoint-sha256> \
+  --output-dir=<converted-checkpoint>
+```
+
+For public LIBERO artifacts, use `--source-kind=libero-pth` and `--variant=libero`.
+The converter preserves source text-padding and attention metadata, then writes
+`provenance.json` containing the source SHA256, benchmark variant, model identifiers,
+and configured revisions. Publish that file with a
+converted checkpoint. Add benchmark results only after reproducing them with the
+documented evaluation command, checkpoint revision, hardware, and seed.
+
+To run the released-checkpoint strict-conversion integration test locally, cache the
+public BERT assets and set the source checkpoint path:
+
+```bash
+TURBOVLA_LIBERO_SOURCE_PATH=/path/to/turbovla_libero.pth \
+TURBOVLA_LIBERO_SOURCE_SHA256=bb1d578d43f9729f27cee8a8ead7d04035ce17a5322f76d7bd8935f9875b4ff4 \
+uv run pytest tests/policies/turbovla/test_conversion_turbovla.py \
+  -k released_libero_checkpoint_strict_conversion -sv
+```
 
 Use the citation supplied by the official TurboVLA project and review the licenses of
 TurboVLA, DINOv3, BERT, the benchmark, and checkpoint parameters before redistribution.

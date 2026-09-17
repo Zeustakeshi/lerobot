@@ -250,7 +250,7 @@ def build_turbovla(args: TurboVLAConfig | Mapping[str, Any] | Any) -> TurboVLA:
                 frozen=bool(_arg(args, "freeze_text_encoder", True)),
                 force_eval_when_frozen=True,
                 zero_padded_tokens=bool(_arg(args, "zero_padded_text", False)),
-                local_files_only=bool(_arg(args, "local_files_only", True)),
+                local_files_only=bool(_arg(args, "local_files_only", False)),
                 attention_implementation=_arg(args, "text_attention_implementation", None),
             ),
             vision=VisionEncoderConfig(
@@ -260,7 +260,7 @@ def build_turbovla(args: TurboVLAConfig | Mapping[str, Any] | Any) -> TurboVLA:
                 position_embedding=str(_arg(args, "position_embedding", "view")),
                 encode_views_separately=bool(_arg(args, "encode_views_separately", True)),
                 frozen=bool(_arg(args, "freeze_vision_encoder", False)),
-                local_files_only=bool(_arg(args, "local_files_only", True)),
+                local_files_only=bool(_arg(args, "local_files_only", False)),
                 attention_implementation=_arg(args, "vision_attention_implementation", None),
                 compute_precision=str(_arg(args, "dinov3_precision", "bf16_autocast")),
                 dropout=float(_arg(args, "vision_dropout", 0.1)),
