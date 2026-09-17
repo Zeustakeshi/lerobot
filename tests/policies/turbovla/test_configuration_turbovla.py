@@ -21,7 +21,7 @@ def test_libero_and_robotwin_presets_are_complete() -> None:
     libero.validate_features()
     robotwin.validate_features()
     assert libero.image_keys == LIBERO_IMAGE_KEYS
-    assert (libero.state_dim, libero.action_dim, libero.chunk_size) == (7, 7, 12)
+    assert (libero.state_dim, libero.action_dim, libero.chunk_size) == (8, 7, 12)
     assert robotwin.image_keys == ROBOTWIN_IMAGE_KEYS
     assert (robotwin.state_dim, robotwin.action_dim, robotwin.chunk_size) == (14, 14, 50)
 
@@ -38,7 +38,7 @@ def test_variant_and_feature_mismatches_fail_early() -> None:
 
     config = TurboVLAConfig(device="cpu")
     assert config.input_features is not None
-    config.input_features[LIBERO_IMAGE_KEYS[0]] = PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256))
+    config.input_features[LIBERO_IMAGE_KEYS[0]] = PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224))
     with pytest.raises(ValueError, match="must have shape"):
         config.validate_features()
 
