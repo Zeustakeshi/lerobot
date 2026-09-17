@@ -1,0 +1,20 @@
+# TurboVLA (experimental)
+
+TurboVLA is available as a native, experimental LeRobot policy type. Phase 2 wires
+the core registry, versioned LIBERO/RoboTwin configuration schemas, serializable
+processors, and checkpoint-format tracer.
+
+```bash
+pip install "lerobot[turbovla]"
+lerobot-train --policy.type=turbovla --dataset.repo_id=<org/dataset>
+```
+
+The command is recognized by the standard CLI, but training and inference are not
+functional until the Phase 3 model port and Phase 4 parity processors land. See the
+[TurboVLA policy page](./policy_turbovla_README.md) for the current contract and
+limitations.
+
+> [!WARNING]
+> Released TurboVLA weights target simulation. This integration does not claim
+> real-robot support, safety, published benchmark reproduction, or checkpoint
+> redistribution rights.
