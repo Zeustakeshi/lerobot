@@ -57,6 +57,8 @@
     title: ACT
   - local: smolvla
     title: SmolVLA
+  - local: turbovla
+    title: TurboVLA (experimental)
   - local: pi0
     title: π₀ (Pi0)
   - local: pi0fast

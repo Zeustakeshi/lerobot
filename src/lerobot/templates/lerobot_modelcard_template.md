@@ -11,6 +11,8 @@
 
 {% if model_name == "smolvla" %}
 [SmolVLA](https://huggingface.co/papers/2506.01844) is a compact, efficient vision-language-action model that achieves competitive performance at reduced computational costs and can be deployed on consumer-grade hardware.
+{% elif model_name == "turbovla" %}
+[TurboVLA](https://github.com/H-EmbodVis/TurboVLA) is a simulation-focused Vision-Language-Action policy for efficient manipulation. The native LeRobot integration is experimental; published TurboVLA weights are simulation-trained and do not imply real-robot safety or robustness.
 {% elif model_name == "act" %}
 [Action Chunking with Transformers (ACT)](https://huggingface.co/papers/2304.13705) is an imitation-learning method that predicts short action chunks instead of single steps. It learns from teleoperated data and often achieves high success rates.
 {% elif model_name == "diffusion" %}
@@ -72,6 +74,7 @@ This policy has been trained and pushed to the Hub using [LeRobot](https://githu
 {% set policy_docs = {
   "act": "act",
   "smolvla": "smolvla",
+  "turbovla": "turbovla",
   "pi0": "pi0",
   "pi0_fast": "pi0fast",
   "pi05": "pi05",
