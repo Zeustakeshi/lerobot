@@ -33,9 +33,9 @@ ROBOTWIN_IMAGE_KEYS = (
 
 def _libero_input_features() -> dict[str, PolicyFeature]:
     return {
-        LIBERO_IMAGE_KEYS[0]: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224)),
-        LIBERO_IMAGE_KEYS[1]: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224)),
-        OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(7,)),
+        LIBERO_IMAGE_KEYS[0]: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256)),
+        LIBERO_IMAGE_KEYS[1]: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256)),
+        OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(8,)),
         OBS_LANGUAGE: PolicyFeature(type=FeatureType.LANGUAGE, shape=(1,)),
     }
 
@@ -52,10 +52,10 @@ class TurboVLAConfig(PreTrainedConfig):
 
     variant: TurboVLAVariant = "libero"
     image_keys: tuple[str, ...] = LIBERO_IMAGE_KEYS
-    image_size: tuple[int, int] = (224, 224)
+    image_size: tuple[int, int] = (256, 256)
     image_crop_size: tuple[int, int] | None = None
     image_interpolation: str = "bilinear"
-    state_dim: int = 7
+    state_dim: int = 8
     action_dim: int = 7
     chunk_size: int = 12
     n_action_steps: int = 12
@@ -67,10 +67,23 @@ class TurboVLAConfig(PreTrainedConfig):
     precision: Literal["bfloat16", "float32"] = "bfloat16"
     attention_implementation: Literal["sdpa", "eager"] = "sdpa"
 
-    hidden_dim: int = 768
-    num_attention_heads: int = 12
-    num_interaction_layers: int = 4
+    hidden_dim: int = 256
+    num_attention_heads: int = 8
+    num_interaction_layers: int = 6
+    interaction_feedforward_dim: int = 2048
+    interaction_inner_dim: int = 1024
+    num_state_tokens: int = 2
+    num_action_decoder_layers: int = 3
+    action_mlp_hidden_dim: int = 512
+    state_hidden_dim: int = 256
     dropout: float = 0.1
+    fusion_dropout: float = 0.0
+    fusion_droppath: float = 0.1
+    text_dropout: float = 0.0
+    freeze_text_encoder: bool = True
+    freeze_vision_encoder: bool = False
+    local_files_only: bool = True
+    max_text_length: int = 256
 
     statistics_id: str = "turbovla/libero-four-suite-no-noops"
     statistics_revision: str | None = None
@@ -128,6 +141,7 @@ class TurboVLAConfig(PreTrainedConfig):
             "hidden_dim": 1024,
             "num_attention_heads": 16,
             "statistics_id": "turbovla/robotwin-released",
+            "image_size": (224, 224),
             "input_features": {
                 **{
                     key: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224))
@@ -143,7 +157,7 @@ class TurboVLAConfig(PreTrainedConfig):
 
     def _expected_variant_values(self) -> dict[str, object]:
         if self.variant == "libero":
-            return {"image_keys": LIBERO_IMAGE_KEYS, "state_dim": 7, "action_dim": 7, "chunk_size": 12}
+            return {"image_keys": LIBERO_IMAGE_KEYS, "state_dim": 8, "action_dim": 7, "chunk_size": 12}
         return {"image_keys": ROBOTWIN_IMAGE_KEYS, "state_dim": 14, "action_dim": 14, "chunk_size": 50}
 
     def validate_features(self) -> None:
