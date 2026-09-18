@@ -7,7 +7,6 @@ from lerobot.policies.turbovla.configuration_turbovla import TurboVLAConfig
 from lerobot.policies.turbovla.libero_benchmark import (
     TURBOVLA_LIBERO_PENDING_BENCHMARK_VALUES,
     TURBOVLA_LIBERO_REQUIRED_BENCHMARK_VALUES,
-    TURBOVLA_LIBERO_SUITES,
     check_turbovla_libero_eval_contract,
     summarize_turbovla_libero_results,
     turbovla_libero_benchmark_command,
@@ -19,7 +18,7 @@ def make_eval_cfg(**overrides):
     policy.use_amp = True
     env = SimpleNamespace(
         type="libero",
-        task=",".join(TURBOVLA_LIBERO_SUITES),
+        task="libero_spatial",
         task_ids=None,
         fps=20,
         obs_type="pixels_agent_pos",
@@ -27,8 +26,9 @@ def make_eval_cfg(**overrides):
         init_states=True,
         control_mode="relative",
         camera_name_mapping=None,
-        observation_height=360,
-        observation_width=360,
+        observation_height=256,
+        observation_width=256,
+        episode_length=220,
     )
     eval_cfg = SimpleNamespace(n_episodes=50, batch_size=1, use_async_envs=True)
     cfg = SimpleNamespace(policy=policy, env=env, eval=eval_cfg, seed=7)
@@ -51,9 +51,7 @@ def test_required_benchmark_values_are_declared_and_left_blank() -> None:
     assert "aggregate_success_rate" in TURBOVLA_LIBERO_REQUIRED_BENCHMARK_VALUES
     assert "model_only_latency_ms_p95" in TURBOVLA_LIBERO_REQUIRED_BENCHMARK_VALUES
     assert "vram_reserved_gb_peak" in TURBOVLA_LIBERO_REQUIRED_BENCHMARK_VALUES
-    assert set(TURBOVLA_LIBERO_PENDING_BENCHMARK_VALUES) == set(
-        TURBOVLA_LIBERO_REQUIRED_BENCHMARK_VALUES
-    )
+    assert set(TURBOVLA_LIBERO_PENDING_BENCHMARK_VALUES) == set(TURBOVLA_LIBERO_REQUIRED_BENCHMARK_VALUES)
     assert all(value is None for value in TURBOVLA_LIBERO_PENDING_BENCHMARK_VALUES.values())
 
 
@@ -74,11 +72,17 @@ def test_contract_rejects_wrong_control_or_camera_mapping() -> None:
     assert any("camera_name_mapping" in error for error in check.errors)
 
 
-def test_benchmark_command_uses_libero_defaults() -> None:
-    command = turbovla_libero_benchmark_command("org/turbovla-libero", "/tmp/out")
+def test_benchmark_command_uses_suite_specific_libero_defaults() -> None:
+    command = turbovla_libero_benchmark_command("org/turbovla-libero", "/tmp/out", "libero_10")
     assert "--env.type=libero" in command
-    assert f"--env.task={','.join(TURBOVLA_LIBERO_SUITES)}" in command
+    assert "--env.task=libero_10" in command
     assert "--eval.n_episodes=50" in command
+    assert "--eval.batch_size=1" in command
+    assert "--policy.precision=bfloat16" in command
+    assert "--policy.n_action_steps=12" in command
+    assert "--env.episode_length=520" in command
+    assert "--env.observation_height=256" in command
+    assert "--env.observation_width=256" in command
     assert "--policy.use_amp=true" in command
 
 
