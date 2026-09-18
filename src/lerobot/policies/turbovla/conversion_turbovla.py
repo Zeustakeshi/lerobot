@@ -391,26 +391,14 @@ def build_config(
     return config
 
 
-def _record_resolved_vision_revision(policy: TurboVLAPolicy, config: TurboVLAConfig) -> None:
-    """Persist the immutable Hub revision actually resolved by Transformers, when exposed."""
+def _is_immutable_hub_revision(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)
 
-    def is_commit_hash(value: object) -> bool:
-        return (
-            isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)
-        )
 
-    if is_commit_hash(config.vision_encoder_revision):
-        return
-    backbone = getattr(getattr(policy, "model", None), "vision_encoder", None)
-    backbone = getattr(backbone, "backbone", None)
-    resolved_revision = getattr(getattr(backbone, "config", None), "_commit_hash", None)
-    if is_commit_hash(resolved_revision):
-        config.vision_encoder_revision = resolved_revision
-        return
-
-    # Older Transformers releases do not always expose `_commit_hash` on the
-    # loaded model config. The cache directory is still named by the immutable
-    # Hub snapshot revision, so use it only when it is locally available.
+def _pin_cached_vision_revision(config: TurboVLAConfig) -> bool:
+    """Pin the DINO revision from an existing Hub snapshot, if one is available."""
+    if _is_immutable_hub_revision(config.vision_encoder_revision):
+        return True
     try:
         from huggingface_hub import snapshot_download
 
@@ -422,12 +410,25 @@ def _record_resolved_vision_revision(policy: TurboVLAPolicy, config: TurboVLACon
                 allow_patterns=["config.json"],
             )
         )
-        if is_commit_hash(snapshot.name):
-            config.vision_encoder_revision = snapshot.name
     except Exception:
-        # The benchmark gate emits the actionable error if no immutable revision
-        # could be recorded; conversion itself remains usable for local development.
-        pass
+        return False
+    if _is_immutable_hub_revision(snapshot.name):
+        config.vision_encoder_revision = snapshot.name
+        return True
+    return False
+
+
+def _record_resolved_vision_revision(policy: TurboVLAPolicy, config: TurboVLAConfig) -> None:
+    """Persist the immutable Hub revision actually resolved by the vision backbone."""
+    if _is_immutable_hub_revision(config.vision_encoder_revision):
+        return
+    backbone = getattr(getattr(policy, "model", None), "vision_encoder", None)
+    backbone = getattr(backbone, "backbone", None)
+    resolved_revision = getattr(getattr(backbone, "config", None), "_commit_hash", None)
+    if _is_immutable_hub_revision(resolved_revision):
+        config.vision_encoder_revision = resolved_revision
+        return
+    _pin_cached_vision_revision(config)
 
 
 def convert_checkpoint(
@@ -455,6 +456,8 @@ def convert_checkpoint(
 
     source_state, source_model_config = load_source_state_and_model_config(source_path, source_kind)
     config = build_config(variant, source_model_config=source_model_config)
+    # Ensure the cache snapshot selected for construction is also serialized.
+    _pin_cached_vision_revision(config)
     policy = TurboVLAPolicy(config)
     _record_resolved_vision_revision(policy, config)
     target_state = policy.state_dict()

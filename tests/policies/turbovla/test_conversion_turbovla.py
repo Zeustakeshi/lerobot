@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -168,6 +169,17 @@ def test_source_vision_identity_is_preserved_and_incompatible_layout_fails() -> 
 
     with pytest.raises(ValueError, match="vision.image_size"):
         conversion.build_config("libero", source_model_config={"vision": {"image_size": 224}})
+
+
+def test_cached_vision_revision_is_pinned_before_model_construction(monkeypatch, tmp_path) -> None:
+    config = TurboVLAConfig(device="cpu", vision_encoder_revision=None)
+    snapshot = tmp_path / "0123456789abcdef0123456789abcdef01234567"
+    snapshot.mkdir()
+    fake_hub = types.SimpleNamespace(snapshot_download=lambda **kwargs: str(snapshot))
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    assert conversion._pin_cached_vision_revision(config)
+    assert config.vision_encoder_revision == snapshot.name
 
 
 def test_released_libero_checkpoint_strict_conversion(tmp_path) -> None:
