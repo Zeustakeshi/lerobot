@@ -61,35 +61,10 @@ size and exposes it to the policy as `observation.language`. Text is not rewritt
 TurboVLA's BERT base uncased tokenizer applies truncation at the configured maximum
 length inside the text encoder. Empty or missing instructions fail explicitly.
 
-The TurboVLA policy page records strict-conversion, vision-parity, A100 runtime,
-model-latency, and LIBERO Spatial smoke-validation results. Evaluation fails before
-rollout unless the resolved DINOv3 revision and its `preprocessor_config.json` match
-the converted processor, including camera order, 180-degree orientation, rescaling,
-and normalization.
-
-## Benchmark fields to fill later
-
-Leave these values blank in public artifacts until a full contract-compliant LIBERO
-run has completed:
-
-| Field                                  | Value |
-| -------------------------------------- | ----- |
-| Source checkpoint SHA256               |       |
-| Source stats SHA256                    |       |
-| Converted checkpoint revision          |       |
-| LeRobot revision                       |       |
-| TurboVLA upstream revision             |       |
-| LIBERO revision                        |       |
-| GPU name / driver / CUDA / PyTorch     |       |
-| Precision                              |       |
-| Seed                                   |       |
-| Suites and trials per task             |       |
-| Per-task success rates                 |       |
-| Per-suite success rates                |       |
-| Aggregate success rate and 95% CI      |       |
-| Model-only latency mean / median / p95 |       |
-| End-to-end latency mean / median / p95 |       |
-| Peak allocated / reserved VRAM         |       |
+Evaluation fails before rollout unless the resolved DINOv3 revision and its
+`preprocessor_config.json` match the converted processor, including camera order,
+180-degree orientation, rescaling, and normalization. See the
+[TurboVLA policy page](./turbovla) for the native LIBERO evaluation command.
 
 ## References and citation
 
