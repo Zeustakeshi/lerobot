@@ -37,14 +37,15 @@ offline execution.
 
 The policy is registered as `turbovla`, so standard LeRobot configuration parsing
 accepts `--policy.type=turbovla`. The validated LIBERO preset uses two ordered
-cameras, 7-D state/actions, chunks of 12, DINOv3 ViT-B, and BERT base. A RoboTwin
+cameras, 8-D state and 7-D actions, chunks of 12, DINOv3 ViT-B, and BERT base. A RoboTwin
 schema is present for future compatibility, but is not a supported release path yet.
 
 Camera tensors are ordered exactly as configured. They must contain RGB images in
 channel-first `C,H,W` or batched `B,C,H,W` layout. `uint8` pixels are converted from
 `[0,255]` to float32 `[0,1]`; floating input must already be in `[0,1]`. The default
-LIBERO path follows upstream TurboVLA: images must already be pre-rotated and sized to
-256×256, then normalized with the DINO/ImageNet mean and std. No StarVLA/OpenVLA-style
+LIBERO path follows upstream TurboVLA: the LIBERO environment adapter flips both image
+axes, then the policy receives 256×256 RGB images normalized with the pinned DINO/ImageNet
+mean and std. No StarVLA/OpenVLA-style
 224px resize is applied. An optional deterministic center crop may be configured, but
 the cropped image must still match the configured model size. LIBERO uses the agent-view
 camera followed by eye-in-hand. RoboTwin uses head, left wrist, then right wrist.
@@ -60,33 +61,35 @@ size and exposes it to the policy as `observation.language`. Text is not rewritt
 TurboVLA's BERT base uncased tokenizer applies truncation at the configured maximum
 length inside the text encoder. Empty or missing instructions fail explicitly.
 
-No success-rate, latency, or VRAM benchmark result is claimed yet. Fixed-input
-conversion/loading parity is covered by tests; benchmark reproduction must be run
-separately on a GPU LIBERO setup before filling model-card metrics.
+No success-rate, latency, or VRAM benchmark result is claimed yet. The benchmark runner
+fails before rollout unless the resolved DINOv3 revision and its `preprocessor_config.json`
+match the converted processor, including camera order, 180-degree orientation, rescaling,
+and normalization. Benchmark reproduction must be run separately on a GPU LIBERO setup
+before filling model-card metrics.
 
 ## Benchmark fields to fill later
 
 Leave these values blank in public artifacts until a full contract-compliant LIBERO
 run has completed:
 
-| Field | Value |
-| --- | --- |
-| Source checkpoint SHA256 | |
-| Source stats SHA256 | |
-| Converted checkpoint revision | |
-| LeRobot revision | |
-| TurboVLA upstream revision | |
-| LIBERO revision | |
-| GPU name / driver / CUDA / PyTorch | |
-| Precision | |
-| Seed | |
-| Suites and trials per task | |
-| Per-task success rates | |
-| Per-suite success rates | |
-| Aggregate success rate and 95% CI | |
-| Model-only latency mean / median / p95 | |
-| End-to-end latency mean / median / p95 | |
-| Peak allocated / reserved VRAM | |
+| Field                                  | Value |
+| -------------------------------------- | ----- |
+| Source checkpoint SHA256               |       |
+| Source stats SHA256                    |       |
+| Converted checkpoint revision          |       |
+| LeRobot revision                       |       |
+| TurboVLA upstream revision             |       |
+| LIBERO revision                        |       |
+| GPU name / driver / CUDA / PyTorch     |       |
+| Precision                              |       |
+| Seed                                   |       |
+| Suites and trials per task             |       |
+| Per-task success rates                 |       |
+| Per-suite success rates                |       |
+| Aggregate success rate and 95% CI      |       |
+| Model-only latency mean / median / p95 |       |
+| End-to-end latency mean / median / p95 |       |
+| Peak allocated / reserved VRAM         |       |
 
 ## References and citation
 
@@ -109,7 +112,7 @@ lerobot-convert-turbovla \
 ```
 
 For public LIBERO artifacts, use `--source-kind=libero-pth` and `--variant=libero`.
-The converter preserves source text-padding and attention metadata, then writes
+The converter preserves source text-padding, vision model identity/revision, and attention metadata, then writes
 `provenance.json` containing the source SHA256, benchmark variant, model identifiers,
 and configured revisions. Publish that file with a
 converted checkpoint. Add benchmark results only after reproducing them with the
@@ -120,7 +123,7 @@ public BERT assets and set the source checkpoint path:
 
 ```bash
 TURBOVLA_LIBERO_SOURCE_PATH=/path/to/turbovla_libero.pth \
-TURBOVLA_LIBERO_SOURCE_SHA256=bb1d578d43f9729f27cee8a8ead7d04035ce17a5322f76d7bd8935f9875b4ff4 \
+TURBOVLA_LIBERO_SOURCE_SHA256=d031ad7be05a2f5d04afb3194ed26b0cb46083685edee7a5e145078a37d26bab \
 uv run pytest tests/policies/turbovla/test_conversion_turbovla.py \
   -k released_libero_checkpoint_strict_conversion -sv
 ```

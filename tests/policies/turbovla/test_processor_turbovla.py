@@ -6,8 +6,10 @@ import torch
 
 from lerobot.policies import make_pre_post_processors
 from lerobot.policies.turbovla.configuration_turbovla import TurboVLAConfig
+from lerobot.policies.turbovla.processor_turbovla import TurboVLAInputProcessorStep
 from lerobot.processor import PolicyProcessorPipeline
 from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
+from lerobot.processor.env_processor import LiberoProcessorStep
 from lerobot.utils.constants import (
     ACTION,
     OBS_LANGUAGE,
@@ -60,6 +62,27 @@ def test_golden_preprocess_and_action_denormalization() -> None:
     normalized_action = torch.ones(1, config.action_dim)
     expected = make_stats(config)[ACTION]["max"]
     torch.testing.assert_close(postprocessor(normalized_action), expected.unsqueeze(0))
+
+
+def test_libero_camera_orientation_and_dino_normalization_match_upstream_recipe() -> None:
+    config = TurboVLAConfig(device="cpu")
+    raw = torch.arange(3 * 256 * 256, dtype=torch.int64).remainder(256).to(torch.uint8)
+    raw = raw.reshape(1, 3, 256, 256).float() / 255.0
+    env_step = LiberoProcessorStep()
+    policy_step = TurboVLAInputProcessorStep(
+        image_keys=config.image_keys,
+        image_size=config.image_size,
+        state_dim=config.state_dim,
+        image_mean=config.image_mean,
+        image_std=config.image_std,
+    )
+
+    rotated = env_step.observation({key: raw.clone() for key in config.image_keys})
+    mean = torch.tensor(config.image_mean).view(1, 3, 1, 1)
+    std = torch.tensor(config.image_std).view(1, 3, 1, 1)
+    expected = (torch.flip(raw, dims=[2, 3]) - mean) / std
+    for key in config.image_keys:
+        torch.testing.assert_close(policy_step._prepare_image(key, rotated[key]), expected, rtol=0, atol=0)
 
 
 def test_processor_save_load_is_golden_equivalent(tmp_path) -> None:

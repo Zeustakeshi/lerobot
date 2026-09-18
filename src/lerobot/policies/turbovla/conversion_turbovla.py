@@ -252,24 +252,31 @@ def _load_stats(path: str | Path | None, config: TurboVLAConfig) -> dict[str, di
     with Path(path).open() as f:
         raw_stats = json.load(f)
 
-    def convert(value: Any) -> Any:
-        if isinstance(value, list):
-            return torch.tensor(value, dtype=torch.float32)
-        if isinstance(value, dict):
-            return {key: convert(item) for key, item in value.items()}
-        return value
+    if not isinstance(raw_stats, dict):
+        raise ValueError("TurboVLA statistics JSON must contain an object")
 
-    # The file may contain a top-level dataset wrapper (e.g. {"libero_all4_no_noops": {...}, "metadata": {...}}).
-    # Extract the first dataset entry and skip non-dataset keys like "metadata".
-    if isinstance(raw_stats, dict):
-        dataset_keys = [k for k in raw_stats if k != "metadata"]
-        if len(dataset_keys) == 1:
-            raw_stats = raw_stats[dataset_keys[0]]
-        elif len(dataset_keys) > 1:
-            raise ValueError(f"Multiple dataset entries in stats file: {dataset_keys}. "
-                             "Pass the specific dataset stats file or update the loader.")
+    # Release statistics use a dataset wrapper plus descriptive metadata. Metadata
+    # includes string paths and must never be passed to torch.tensor().
+    dataset_keys = [key for key in raw_stats if key != "metadata"]
+    if len(dataset_keys) != 1:
+        raise ValueError(f"Expected exactly one dataset entry in TurboVLA statistics, found: {dataset_keys}")
+    selected = raw_stats[dataset_keys[0]]
+    if not isinstance(selected, dict):
+        raise ValueError(f"TurboVLA statistics entry {dataset_keys[0]!r} must be an object")
 
-    return convert(raw_stats)
+    stats: dict[str, dict[str, torch.Tensor]] = {}
+    for feature, values in selected.items():
+        if not isinstance(values, dict):
+            raise ValueError(f"TurboVLA statistics section {feature!r} must be an object")
+        stats[feature] = {}
+        for name, value in values.items():
+            try:
+                stats[feature][name] = torch.tensor(value, dtype=torch.float32)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"TurboVLA statistics {feature}.{name} must be numeric, not {type(value).__name__}"
+                ) from exc
+    return stats
 
 
 def _write_model_card(
@@ -282,9 +289,7 @@ def _write_model_card(
     source_url: str | None,
     checkpoint_license: str,
 ) -> None:
-    pending_lines = "\n".join(
-        f"- {key}: " for key in TURBOVLA_LIBERO_PENDING_BENCHMARK_VALUES
-    )
+    pending_lines = "\n".join(f"- {key}: " for key in TURBOVLA_LIBERO_PENDING_BENCHMARK_VALUES)
     content = f"""---
 library_name: lerobot
 tags:
@@ -331,14 +336,18 @@ def build_config(
     source_model_config: Mapping[str, Any] | None = None,
 ) -> TurboVLAConfig:
     text_config = source_model_config.get("text", {}) if source_model_config else {}
+    vision_config = source_model_config.get("vision", {}) if source_model_config else {}
     interaction_config = source_model_config.get("interaction", {}) if source_model_config else {}
     if not isinstance(text_config, Mapping):
         raise ValueError("TurboVLA source model_config.text must be an object")
+    if not isinstance(vision_config, Mapping):
+        raise ValueError("TurboVLA source model_config.vision must be an object")
     if not isinstance(interaction_config, Mapping):
         raise ValueError("TurboVLA source model_config.interaction must be an object")
     source_text_kwargs: dict[str, Any] = {}
     for source_name, target_name in (
         ("model_name_or_path", "language_encoder_id"),
+        ("revision", "language_encoder_revision"),
         ("max_length", "max_text_length"),
         ("padding_length", "text_padding_length"),
         ("padding_length_by_instruction", "text_padding_length_by_instruction"),
@@ -347,11 +356,78 @@ def build_config(
             source_text_kwargs[target_name] = text_config[source_name]
     if "attention_backend" in interaction_config:
         source_text_kwargs["attention_implementation"] = interaction_config["attention_backend"]
+
+    source_vision_kwargs: dict[str, Any] = {}
+    for source_name, target_name in (
+        ("model_name_or_path", "vision_encoder_id"),
+        ("revision", "vision_encoder_revision"),
+    ):
+        if source_name in vision_config:
+            source_vision_kwargs[target_name] = vision_config[source_name]
+
     if variant == "libero":
-        return TurboVLAConfig.libero(device=device, precision=precision, **source_text_kwargs)
-    if variant == "robotwin":
-        return TurboVLAConfig.robotwin(device=device, precision=precision, **source_text_kwargs)
-    raise ValueError(f"Unsupported TurboVLA variant: {variant}")
+        config = TurboVLAConfig.libero(
+            device=device, precision=precision, **source_text_kwargs, **source_vision_kwargs
+        )
+    elif variant == "robotwin":
+        config = TurboVLAConfig.robotwin(
+            device=device, precision=precision, **source_text_kwargs, **source_vision_kwargs
+        )
+    else:
+        raise ValueError(f"Unsupported TurboVLA variant: {variant}")
+
+    expected_vision_values = {
+        "image_size": config.image_size[0],
+        "num_views": len(config.image_keys),
+        "position_embedding": "view",
+        "encode_views_separately": True,
+    }
+    for name, expected in expected_vision_values.items():
+        if name in vision_config and vision_config[name] != expected:
+            raise ValueError(
+                f"TurboVLA source model_config.vision.{name}={vision_config[name]!r} does not match "
+                f"the {variant} integration contract ({expected!r})"
+            )
+    return config
+
+
+def _record_resolved_vision_revision(policy: TurboVLAPolicy, config: TurboVLAConfig) -> None:
+    """Persist the immutable Hub revision actually resolved by Transformers, when exposed."""
+
+    def is_commit_hash(value: object) -> bool:
+        return (
+            isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)
+        )
+
+    if is_commit_hash(config.vision_encoder_revision):
+        return
+    backbone = getattr(getattr(policy, "model", None), "vision_encoder", None)
+    backbone = getattr(backbone, "backbone", None)
+    resolved_revision = getattr(getattr(backbone, "config", None), "_commit_hash", None)
+    if is_commit_hash(resolved_revision):
+        config.vision_encoder_revision = resolved_revision
+        return
+
+    # Older Transformers releases do not always expose `_commit_hash` on the
+    # loaded model config. The cache directory is still named by the immutable
+    # Hub snapshot revision, so use it only when it is locally available.
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot = Path(
+            snapshot_download(
+                repo_id=config.vision_encoder_id,
+                revision=config.vision_encoder_revision,
+                local_files_only=True,
+                allow_patterns=["config.json"],
+            )
+        )
+        if is_commit_hash(snapshot.name):
+            config.vision_encoder_revision = snapshot.name
+    except Exception:
+        # The benchmark gate emits the actionable error if no immutable revision
+        # could be recorded; conversion itself remains usable for local development.
+        pass
 
 
 def convert_checkpoint(
@@ -380,6 +456,7 @@ def convert_checkpoint(
     source_state, source_model_config = load_source_state_and_model_config(source_path, source_kind)
     config = build_config(variant, source_model_config=source_model_config)
     policy = TurboVLAPolicy(config)
+    _record_resolved_vision_revision(policy, config)
     target_state = policy.state_dict()
     converted_state, mapped_names, ignored_keys = map_state_dict(
         source_state,
@@ -467,7 +544,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-kind", required=True, choices=("libero-pth", "robotwin-ema-safetensors"))
     parser.add_argument("--source-revision", help="Immutable upstream repository revision for provenance.")
     parser.add_argument("--source-url", help="Original checkpoint URL or release page for provenance.")
-    parser.add_argument("--checkpoint-license", default="other", help="License identifier for converted weights.")
+    parser.add_argument(
+        "--checkpoint-license", default="other", help="License identifier for converted weights."
+    )
     parser.add_argument("--expected-sha256")
     parser.add_argument("--key-map", type=Path, help="JSON object mapping upstream keys to LeRobot keys.")
     parser.add_argument(
