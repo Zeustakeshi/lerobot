@@ -61,11 +61,11 @@ size and exposes it to the policy as `observation.language`. Text is not rewritt
 TurboVLA's BERT base uncased tokenizer applies truncation at the configured maximum
 length inside the text encoder. Empty or missing instructions fail explicitly.
 
-No success-rate, latency, or VRAM benchmark result is claimed yet. The benchmark runner
-fails before rollout unless the resolved DINOv3 revision and its `preprocessor_config.json`
-match the converted processor, including camera order, 180-degree orientation, rescaling,
-and normalization. Benchmark reproduction must be run separately on a GPU LIBERO setup
-before filling model-card metrics.
+The TurboVLA policy page records strict-conversion, vision-parity, A100 runtime,
+model-latency, and LIBERO Spatial smoke-validation results. Evaluation fails before
+rollout unless the resolved DINOv3 revision and its `preprocessor_config.json` match
+the converted processor, including camera order, 180-degree orientation, rescaling,
+and normalization.
 
 ## Benchmark fields to fill later
 

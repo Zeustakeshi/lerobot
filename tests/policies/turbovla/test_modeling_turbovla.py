@@ -52,10 +52,12 @@ class _MinimalBertEncoder(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.last_head_mask = None
+        self.last_attention_mask = None
 
-    def forward(self, hidden_states, *, head_mask=None, **kwargs):
+    def forward(self, hidden_states, *, attention_mask=None, head_mask=None, **kwargs):
         del kwargs
         self.last_head_mask = head_mask
+        self.last_attention_mask = attention_mask
         return (hidden_states,)
 
 
@@ -113,6 +115,25 @@ def test_bert_wrapper_supports_legacy_and_current_transformers_apis() -> None:
         assert expected_mask_keyword in bert.mask_kwargs
         expected_head_mask = ["legacy", "legacy"] if api == "legacy" else [None, None]
         assert encoder.last_head_mask == expected_head_mask
+
+
+def test_bert_wrapper_supports_transformers_5_without_mask_helpers() -> None:
+    bert, encoder = _minimal_bert("current")
+    delattr(type(bert), "get_extended_attention_mask")
+    delattr(type(bert), "invert_attention_mask")
+
+    wrapped = BertModelWarper(bert)
+    result = wrapped(
+        input_ids=torch.ones((1, 3), dtype=torch.long),
+        attention_mask=torch.tensor([[1, 1, 0]]),
+        return_dict=False,
+    )
+
+    assert result[0].shape == (1, 3, 8)
+    assert encoder.last_head_mask == [None, None]
+    assert encoder.last_attention_mask.shape == (1, 1, 1, 3)
+    assert encoder.last_attention_mask[0, 0, 0, 0] == 0
+    assert encoder.last_attention_mask[0, 0, 0, 2] < -1e10
 
 
 def test_synthetic_forward_backward_and_batch_shapes() -> None:

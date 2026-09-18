@@ -55,18 +55,25 @@ these fields only from a run that satisfies the contract above:
 | End-to-end latency mean / median / p95 |       |
 | Peak allocated / reserved VRAM         |       |
 
-```bash
-python benchmarks/run_turbovla_libero_benchmark.py \
-  --source-checkpoint=/path/to/turbovla_libero.pth \
-  --stats-json=/path/to/libero_all4_stats.json \
-  --output-dir=outputs/turbovla_libero_benchmark
-```
+## Validation
 
-The runner converts with strict tensor coverage, pins and verifies the DINOv3
-preprocessor contract, then evaluates each suite in a separate evaluator process
-before merging the raw suite outputs. `--parallel-suites=2` through `4` may be used
-on a sufficiently large GPU. Parallel wall time is recorded as throughput, never as
-per-action latency.
+The released LIBERO checkpoint at upstream revision
+`cb5300544693013164c4bb251a13036002a55c81` was converted with checkpoint SHA256
+`d031ad7be05a2f5d04afb3194ed26b0cb46083685edee7a5e145078a37d26bab` and
+statistics SHA256 `b6a26530cceee6748481995067bfa5570a48a4d22990730dc187fbfa1cc24827`.
+
+| Validation | Result |
+| --- | --- |
+| Strict conversion | 672 tensors loaded and mapped; 0 tensors ignored |
+| Vision input contract | Passed with pinned DINOv3 revision `5931719e67bbdb9737e363e781fb0c67687896bc` |
+| Hardware | NVIDIA A100-SXM4-40GB, CUDA 13.0, PyTorch 2.14.0+cu130, bf16 AMP |
+| Model-only latency | 62.46 ms mean, 62.37 ms median, 63.61 ms P95 across 50 iterations |
+| Model-only peak VRAM | 0.835 GiB allocated; 0.916 GiB reserved |
+| LIBERO Spatial smoke evaluation | 9/10 successes over one episode for each Spatial task |
+
+Model-only latency uses batch size 1, two normalized 256x256 RGB images, an
+8-D state, and one LIBERO instruction. It excludes image processing, rendering,
+simulator time, action-queue reuse, and host-to-device transfer.
 
 > [!WARNING]
 > Released TurboVLA weights target simulation. This integration does not claim

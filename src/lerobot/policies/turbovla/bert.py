@@ -23,9 +23,46 @@ class BertModelWarper(nn.Module):
         self.encoder = bert_model.encoder
         self.pooler = bert_model.pooler
 
-        self.get_extended_attention_mask = bert_model.get_extended_attention_mask
-        self.invert_attention_mask = bert_model.invert_attention_mask
+        self.get_extended_attention_mask = getattr(
+            bert_model, "get_extended_attention_mask", self._fallback_get_extended_attention_mask
+        )
+        self.invert_attention_mask = getattr(
+            bert_model, "invert_attention_mask", self._fallback_invert_attention_mask
+        )
         self.get_head_mask = getattr(bert_model, "get_head_mask", self._fallback_get_head_mask)
+
+    def _fallback_get_extended_attention_mask(
+        self,
+        attention_mask: Tensor,
+        input_shape: tuple[int, ...],
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Tensor:
+        """Recreate the Transformers 4 BERT mask helper removed in Transformers 5."""
+        del input_shape, device
+        if attention_mask.dim() == 2:
+            extended_attention_mask = attention_mask[:, None, None, :]
+        elif attention_mask.dim() == 3:
+            extended_attention_mask = attention_mask[:, None, :, :]
+        else:
+            raise ValueError(f"attention_mask must have dimension 2 or 3, got {attention_mask.dim()}")
+        dtype = dtype or self.embeddings.word_embeddings.weight.dtype
+        extended_attention_mask = extended_attention_mask.to(dtype=dtype)
+        return (1.0 - extended_attention_mask) * torch.finfo(dtype).min
+
+    def _fallback_invert_attention_mask(self, encoder_attention_mask: Tensor) -> Tensor:
+        """Recreate the Transformers 4 cross-attention mask helper."""
+        if encoder_attention_mask.dim() == 2:
+            extended_attention_mask = encoder_attention_mask[:, None, None, :]
+        elif encoder_attention_mask.dim() == 3:
+            extended_attention_mask = encoder_attention_mask[:, None, :, :]
+        else:
+            raise ValueError(
+                f"encoder_attention_mask must have dimension 2 or 3, got {encoder_attention_mask.dim()}"
+            )
+        dtype = self.embeddings.word_embeddings.weight.dtype
+        extended_attention_mask = extended_attention_mask.to(dtype=dtype)
+        return (1.0 - extended_attention_mask) * torch.finfo(dtype).min
 
     def _fallback_get_head_mask(self, head_mask, num_hidden_layers: int):
         """Compatibility with Transformers versions that removed ``get_head_mask``."""
