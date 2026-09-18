@@ -8,6 +8,7 @@ import torch
 from torch import nn
 
 from lerobot.policies import get_policy_class
+from lerobot.policies.turbovla.bert import BertModelWarper
 from lerobot.policies.turbovla.configuration_turbovla import TurboVLAConfig
 from lerobot.policies.turbovla.modeling_turbovla import TurboVLAPolicy, _make_upstream_config
 from lerobot.policies.turbovla.transformer import TransformerEncoderLayer
@@ -35,6 +36,83 @@ def make_batch(config: TurboVLAConfig, batch_size: int = 2):
     batch[ACTION] = torch.randn(batch_size, config.chunk_size, config.action_dim)
     batch["action_is_pad"] = torch.zeros(batch_size, config.chunk_size, dtype=torch.bool)
     return batch
+
+
+class _MinimalBertEmbeddings(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.word_embeddings = nn.Embedding(32, 8)
+
+    def forward(self, input_ids=None, inputs_embeds=None, **kwargs):
+        del kwargs
+        return self.word_embeddings(input_ids) if inputs_embeds is None else inputs_embeds
+
+
+class _MinimalBertEncoder(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_head_mask = None
+
+    def forward(self, hidden_states, *, head_mask=None, **kwargs):
+        del kwargs
+        self.last_head_mask = head_mask
+        return (hidden_states,)
+
+
+def _minimal_bert(api: str):
+    encoder = _MinimalBertEncoder()
+    config = types.SimpleNamespace(
+        output_attentions=False,
+        output_hidden_states=False,
+        use_return_dict=False,
+        is_decoder=False,
+        use_cache=False,
+        num_hidden_layers=2,
+    )
+
+    class MinimalBert:
+        def __init__(self) -> None:
+            self.config = config
+            self.embeddings = _MinimalBertEmbeddings()
+            self.encoder = encoder
+            self.pooler = None
+
+        @staticmethod
+        def invert_attention_mask(mask):
+            return mask
+
+        def get_head_mask(self, head_mask, num_hidden_layers):
+            return ["legacy"] * num_hidden_layers
+
+    if api == "legacy":
+
+        def get_extended_attention_mask(self, attention_mask, input_shape, *, device):
+            self.mask_kwargs = {"device": device}
+            return attention_mask[:, None, None, :]
+
+        MinimalBert.get_extended_attention_mask = get_extended_attention_mask
+    else:
+        delattr(MinimalBert, "get_head_mask")
+
+        def get_extended_attention_mask(self, attention_mask, input_shape, *, dtype):
+            self.mask_kwargs = {"dtype": dtype}
+            return attention_mask[:, None, None, :]
+
+        MinimalBert.get_extended_attention_mask = get_extended_attention_mask
+
+    return MinimalBert(), encoder
+
+
+def test_bert_wrapper_supports_legacy_and_current_transformers_apis() -> None:
+    for api, expected_mask_keyword in (("legacy", "device"), ("current", "dtype")):
+        bert, encoder = _minimal_bert(api)
+        wrapped = BertModelWarper(bert)
+        result = wrapped(input_ids=torch.ones((1, 3), dtype=torch.long), return_dict=False)
+
+        assert result[0].shape == (1, 3, 8)
+        assert expected_mask_keyword in bert.mask_kwargs
+        expected_head_mask = ["legacy", "legacy"] if api == "legacy" else [None, None]
+        assert encoder.last_head_mask == expected_head_mask
 
 
 def test_synthetic_forward_backward_and_batch_shapes() -> None:

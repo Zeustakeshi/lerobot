@@ -39,6 +39,14 @@ TURBOVLA_LIBERO_CHUNK_SIZE = 12
 TURBOVLA_LIBERO_OPEN_LOOP_ACTIONS = 12
 TURBOVLA_LIBERO_ACTION_DIM = 7
 TURBOVLA_LIBERO_STATE_DIM = 8
+# TurboVLA's released VLA-Adapter rollout uses a distinct maximum action count
+# for each suite. A single `--env.episode_length` cannot represent all suites.
+TURBOVLA_LIBERO_EPISODE_LENGTHS: dict[str, int] = {
+    "libero_spatial": 220,
+    "libero_object": 280,
+    "libero_goal": 300,
+    "libero_10": 520,
+}
 TURBOVLA_LIBERO_SEED = 7
 TURBOVLA_LIBERO_SUCCESS_TOLERANCE_POINTS = 2.0
 
@@ -92,8 +100,11 @@ class TurboVLALiberoEvalContract:
     )
     image_keys: tuple[str, ...] = LIBERO_IMAGE_KEYS
     camera_names: tuple[str, ...] = ("agentview_image", "robot0_eye_in_hand_image")
+    observation_height: int = 256
+    observation_width: int = 256
     control_mode: str = "relative"
     obs_type: str = "pixels_agent_pos"
+    episode_lengths: dict[str, int] = field(default_factory=lambda: dict(TURBOVLA_LIBERO_EPISODE_LENGTHS))
     action_dim: int = TURBOVLA_LIBERO_ACTION_DIM
     state_dim: int = TURBOVLA_LIBERO_STATE_DIM
     chunk_size: int = TURBOVLA_LIBERO_CHUNK_SIZE
@@ -174,9 +185,13 @@ def check_turbovla_libero_eval_contract(cfg: Any, *, strict: bool = False) -> Tu
             result.errors.append("TurboVLA LIBERO requires env.init_states=true.")
         if getattr(env, "fps", None) != 20:
             result.errors.append("TurboVLA LIBERO requires env.fps=20.")
-        if getattr(env, "observation_height", None) != 360 or getattr(env, "observation_width", None) != 360:
+        if (
+            getattr(env, "observation_height", None) != contract.observation_height
+            or getattr(env, "observation_width", None) != contract.observation_width
+        ):
             result.warnings.append(
-                "Official LIBERO eval uses 360x360 environment observations before TurboVLA preprocessing."
+                "Official TurboVLA LIBERO evaluation renders "
+                f"{contract.observation_height}x{contract.observation_width} camera observations for DINOv3."
             )
         camera_names = tuple(item.strip() for item in str(getattr(env, "camera_name", "")).split(",") if item)
         if camera_names != contract.camera_names:
@@ -188,15 +203,28 @@ def check_turbovla_libero_eval_contract(cfg: Any, *, strict: bool = False) -> Tu
         if getattr(env, "task_ids", None) is not None:
             result.warnings.append("task_ids restricts the benchmark; omit it for full-suite results.")
         suites = _as_suite_tuple(getattr(env, "task", None))
-        if suites != contract.suites:
+        if len(suites) == 1 and suites[0] in contract.episode_lengths:
+            expected_episode_length = contract.episode_lengths[suites[0]]
+            if getattr(env, "episode_length", None) != expected_episode_length:
+                result.warnings.append(
+                    f"TurboVLA {suites[0]} uses env.episode_length={expected_episode_length}."
+                )
+        elif suites == contract.suites:
             result.warnings.append(
-                f"Full TurboVLA LIBERO benchmark uses env.task={','.join(contract.suites)!r}; got {suites!r}."
+                "TurboVLA's four LIBERO suites require separate evaluator invocations because their "
+                "upstream episode lengths differ."
+            )
+        else:
+            result.errors.append(
+                f"TurboVLA LIBERO requires one of {tuple(contract.episode_lengths)!r}; got {suites!r}."
             )
 
     if eval_cfg is not None and getattr(eval_cfg, "n_episodes", None) != contract.trials_per_task:
         result.warnings.append(
             f"Full TurboVLA LIBERO benchmark uses eval.n_episodes={contract.trials_per_task} per task."
         )
+    if eval_cfg is not None and getattr(eval_cfg, "batch_size", None) != 1:
+        result.warnings.append("Full TurboVLA LIBERO benchmark uses eval.batch_size=1.")
     if getattr(cfg, "seed", None) != contract.seed:
         result.warnings.append(f"Full TurboVLA LIBERO benchmark uses seed={contract.seed}.")
     if getattr(policy, "use_amp", None) is not True:
@@ -208,19 +236,31 @@ def check_turbovla_libero_eval_contract(cfg: Any, *, strict: bool = False) -> Tu
     return result
 
 
-def turbovla_libero_benchmark_command(policy_path: str, output_dir: str) -> list[str]:
-    """Return the canonical ``lerobot-eval`` command for the full LIBERO benchmark."""
+def turbovla_libero_benchmark_command(policy_path: str, output_dir: str, suite: str) -> list[str]:
+    """Return one canonical suite-specific ``lerobot-eval`` command.
 
-    suites = ",".join(TURBOVLA_LIBERO_SUITES)
+    The public TurboVLA protocol requires a separate invocation per suite because
+    LIBERO's rollout horizon differs by suite.
+    """
+
+    if suite not in TURBOVLA_LIBERO_EPISODE_LENGTHS:
+        raise ValueError(f"Unsupported TurboVLA LIBERO suite {suite!r}")
+
     return [
         "lerobot-eval",
         f"--policy.path={policy_path}",
         "--env.type=libero",
-        f"--env.task={suites}",
+        f"--env.task={suite}",
         f"--eval.n_episodes={TURBOVLA_LIBERO_TRIALS_PER_TASK}",
+        "--eval.batch_size=1",
         "--eval.use_async_envs=true",
         "--policy.device=cuda",
+        "--policy.precision=bfloat16",
         "--policy.use_amp=true",
+        f"--policy.n_action_steps={TURBOVLA_LIBERO_OPEN_LOOP_ACTIONS}",
+        f"--env.episode_length={TURBOVLA_LIBERO_EPISODE_LENGTHS[suite]}",
+        "--env.observation_height=256",
+        "--env.observation_width=256",
         f"--seed={TURBOVLA_LIBERO_SEED}",
         f"--output_dir={output_dir}",
     ]

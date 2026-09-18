@@ -131,6 +131,7 @@ def test_source_text_layout_is_preserved_in_converted_config() -> None:
         source_model_config={
             "text": {
                 "model_name_or_path": "bert-base-uncased",
+                "revision": "immutable-bert-revision",
                 "max_length": 256,
                 "padding_length": 21,
                 "padding_length_by_instruction": {"put the bowl on the plate": 11},
@@ -140,10 +141,33 @@ def test_source_text_layout_is_preserved_in_converted_config() -> None:
     )
 
     assert config.language_encoder_id == "bert-base-uncased"
+    assert config.language_encoder_revision == "immutable-bert-revision"
     assert config.max_text_length == 256
     assert config.text_padding_length == 21
     assert config.text_padding_length_by_instruction == {"put the bowl on the plate": 11}
     assert config.attention_implementation == "manual"
+
+
+def test_source_vision_identity_is_preserved_and_incompatible_layout_fails() -> None:
+    config = conversion.build_config(
+        "libero",
+        source_model_config={
+            "vision": {
+                "model_name_or_path": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+                "revision": "immutable-dinov3-revision",
+                "image_size": 256,
+                "num_views": 2,
+                "position_embedding": "view",
+                "encode_views_separately": True,
+            }
+        },
+    )
+
+    assert config.vision_encoder_id == "facebook/dinov3-vitb16-pretrain-lvd1689m"
+    assert config.vision_encoder_revision == "immutable-dinov3-revision"
+
+    with pytest.raises(ValueError, match="vision.image_size"):
+        conversion.build_config("libero", source_model_config={"vision": {"image_size": 224}})
 
 
 def test_released_libero_checkpoint_strict_conversion(tmp_path) -> None:
