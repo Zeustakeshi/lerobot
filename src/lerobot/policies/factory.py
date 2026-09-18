@@ -330,6 +330,14 @@ def make_policy(
     if rename_map:
         features = {rename_map.get(key, key): feature for key, feature in features.items()}
 
+    # A small number of policies have an embodiment-specific architecture and
+    # need to derive that contract before the generic feature assignment below.
+    # This is intentionally duck-typed so third-party policy plugins can opt in
+    # without being imported by this lightweight factory module.
+    adapt_to_dataset_features = getattr(cfg, "adapt_to_dataset_features", None)
+    if not cfg.pretrained_path and callable(adapt_to_dataset_features):
+        adapt_to_dataset_features(features)
+
     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     if not cfg.input_features:
         cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}

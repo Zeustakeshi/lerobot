@@ -11,7 +11,7 @@ from lerobot.policies.turbovla.configuration_turbovla import (
     ROBOTWIN_IMAGE_KEYS,
     TurboVLAConfig,
 )
-from lerobot.utils.constants import OBS_LANGUAGE
+from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 
 
 def test_libero_and_robotwin_presets_are_complete() -> None:
@@ -44,6 +44,39 @@ def test_variant_and_feature_mismatches_fail_early() -> None:
         config.validate_features()
 
 
+def test_custom_config_infers_embodiment_from_dataset_features() -> None:
+    config = TurboVLAConfig(device="cpu")
+    config.adapt_to_dataset_features(
+        {
+            "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256)),
+            "observation.images.top": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(14,)),
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(9,)),
+        }
+    )
+
+    config.validate_features()
+    assert config.variant == "custom"
+    assert config.image_keys == ("observation.images.wrist", "observation.images.top")
+    assert config.image_size == (256, 256)
+    assert config.resize_images
+    assert (config.state_dim, config.action_dim) == (14, 9)
+
+
+def test_custom_config_accepts_differently_sized_cameras_by_enabling_resize() -> None:
+    config = TurboVLAConfig(device="cpu")
+    config.adapt_to_dataset_features(
+        {
+            "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 480, 640)),
+            "observation.images.top": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(8,)),
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(7,)),
+        }
+    )
+    config.validate_features()
+    assert config.resize_images
+
+
 def test_config_save_load_routes_through_base_class(tmp_path) -> None:
     config = TurboVLAConfig.robotwin(device="cpu")
     config.save_pretrained(tmp_path)
@@ -54,3 +87,23 @@ def test_config_save_load_routes_through_base_class(tmp_path) -> None:
     loaded = PreTrainedConfig.from_pretrained(tmp_path)
     assert isinstance(loaded, TurboVLAConfig)
     assert loaded == config
+
+
+def test_inferred_custom_schema_is_saved_with_the_checkpoint(tmp_path) -> None:
+    config = TurboVLAConfig(device="cpu")
+    config.adapt_to_dataset_features(
+        {
+            "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 480, 640)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(12,)),
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(6,)),
+        }
+    )
+    config.save_pretrained(tmp_path)
+
+    loaded = PreTrainedConfig.from_pretrained(tmp_path)
+
+    assert isinstance(loaded, TurboVLAConfig)
+    assert not loaded.infer_from_dataset
+    assert loaded.variant == "custom"
+    assert loaded.image_keys == ("observation.images.wrist",)
+    assert (loaded.state_dim, loaded.action_dim) == (12, 6)

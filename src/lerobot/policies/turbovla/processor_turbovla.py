@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+import torch.nn.functional as F  # noqa: N812
 
 from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.lerobot_types import RobotObservation, TransitionKey
@@ -50,6 +51,7 @@ class TurboVLAInputProcessorStep(ObservationProcessorStep):
     image_size: tuple[int, int]
     state_dim: int
     image_crop_size: tuple[int, int] | None = None
+    resize_images: bool = False
     interpolation: str = "bilinear"
     image_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
     image_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
@@ -95,10 +97,15 @@ class TurboVLAInputProcessorStep(ObservationProcessorStep):
             top = (height - crop_h) // 2
             left = (width - crop_w) // 2
             image = image[..., top : top + crop_h, left : left + crop_w]
+        if self.resize_images and tuple(image.shape[-2:]) != self.image_size:
+            interpolation_kwargs: dict[str, object] = {"size": self.image_size, "mode": self.interpolation}
+            if self.interpolation != "nearest":
+                interpolation_kwargs["align_corners"] = False
+            image = F.interpolate(image, **interpolation_kwargs)
         if tuple(image.shape[-2:]) != self.image_size:
             raise ValueError(
                 f"TurboVLA camera {key!r} must already be {self.image_size} after optional crop; "
-                f"got {tuple(image.shape[-2:])}. The upstream DINOv3 processor keeps spatial resize disabled."
+                f"got {tuple(image.shape[-2:])}. Enable resize_images to resize dataset cameras."
             )
         mean = torch.tensor(self.image_mean, dtype=image.dtype, device=image.device).view(1, 3, 1, 1)
         std = torch.tensor(self.image_std, dtype=image.dtype, device=image.device).view(1, 3, 1, 1)
@@ -167,6 +174,7 @@ class TurboVLAInputProcessorStep(ObservationProcessorStep):
             "image_size": self.image_size,
             "state_dim": self.state_dim,
             "image_crop_size": self.image_crop_size,
+            "resize_images": self.resize_images,
             "interpolation": self.interpolation,
             "image_mean": self.image_mean,
             "image_std": self.image_std,
@@ -237,6 +245,7 @@ def make_turbovla_pre_post_processors(
         image_size=config.image_size,
         state_dim=config.state_dim,
         image_crop_size=config.image_crop_size,
+        resize_images=config.resize_images,
         interpolation=config.image_interpolation,
         image_mean=config.image_mean,
         image_std=config.image_std,

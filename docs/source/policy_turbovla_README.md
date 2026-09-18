@@ -36,9 +36,18 @@ offline execution.
 ## Data and processor contract
 
 The policy is registered as `turbovla`, so standard LeRobot configuration parsing
-accepts `--policy.type=turbovla`. The validated LIBERO preset uses two ordered
-cameras, 8-D state and 7-D actions, chunks of 12, DINOv3 ViT-B, and BERT base. A RoboTwin
-schema is present for future compatibility, but is not a supported release path yet.
+accepts `--policy.type=turbovla`. For fresh training, the policy derives ordered
+camera names, image resolution, state dimension, and action dimension from the
+current dataset; the resulting schema is saved in the checkpoint. This lets the
+same training entry point target different robot embodiments without a
+`rename_map`. The current custom path requires one `observation.state` vector,
+one `action` vector, and one or more RGB cameras; arbitrary camera resolutions
+are resized to the configured square DINOv3 input. It does not pad heterogeneous
+state/action dimensions within one run.
+
+The validated LIBERO preset uses two ordered cameras, 8-D state and 7-D actions,
+chunks of 12, DINOv3 ViT-B, and BERT base. A RoboTwin schema is present for
+future compatibility, but is not a supported release path yet.
 
 Camera tensors are ordered exactly as configured. They must contain RGB images in
 channel-first `C,H,W` or batched `B,C,H,W` layout. `uint8` pixels are converted from

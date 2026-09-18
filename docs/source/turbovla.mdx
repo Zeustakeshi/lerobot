@@ -1,9 +1,9 @@
 # TurboVLA (experimental)
 
-TurboVLA is an experimental native LeRobot policy for the released LIBERO
-checkpoint. The integration provides model loading, serializable processors,
-and strict conversion of the upstream checkpoint. RoboTwin is not a validated
-release path.
+TurboVLA is an experimental native LeRobot policy. The integration provides
+model loading, serializable processors, strict conversion of upstream
+checkpoints, and fresh training on a LeRobot dataset. RoboTwin is not a
+validated release path.
 
 ## Installation
 
@@ -59,3 +59,35 @@ output directory:
 > real-robot support, safety, or checkpoint redistribution rights. Publish
 > benchmark results only with their checkpoint, environment, hardware, seed,
 > and trial-count provenance.
+
+## Training a custom robot dataset
+
+For a fresh `--policy.type=turbovla` run, TurboVLA derives its camera names,
+camera resolution, state dimension, and action dimension from the dataset
+metadata. Do **not** provide `--rename_map`: the original dataset camera names
+are saved in the resulting checkpoint and used again at inference time.
+
+```bash
+lerobot-train \
+  --policy.type=turbovla \
+  --policy.device=cuda \
+  --policy.precision=bfloat16 \
+  --policy.use_amp=true \
+  --dataset.repo_id=your-org/your-dataset \
+  --dataset.root=./your-dataset \
+  --output_dir=outputs/turbovla-custom \
+  --job_name=turbovla-custom \
+  --batch_size=8 \
+  --steps=20000
+```
+
+The dataset must expose one `observation.state` vector and one `action` vector,
+plus one or more RGB cameras. Cameras may use different source resolutions; the
+custom processor resizes them to the configured square DINOv3 input (256×256 by
+default). A single run uses one fixed state/action schema. Train separate
+checkpoints for robots with different schemas; heterogeneous embodiment padding
+is not implemented yet.
+
+The fixed `libero` and `robotwin` presets are retained for converted upstream
+weights. To deliberately train using the fixed LIBERO contract, pass
+`--policy.infer_from_dataset=false`.
