@@ -166,6 +166,18 @@ def test_camera_layout_and_float_range_fail_loudly() -> None:
         preprocessor(observation)
 
 
+def test_custom_processor_resizes_dataset_cameras() -> None:
+    config = TurboVLAConfig(device="cpu")
+    config.resize_images = True
+    preprocessor, _ = make_pre_post_processors(config, dataset_stats=make_stats(config))
+    observation = make_observation(config)
+    observation[config.image_keys[0]] = torch.zeros(3, 128, 192, dtype=torch.uint8)
+
+    processed = preprocessor(observation)
+
+    assert processed[config.image_keys[0]].shape == (1, 3, *config.image_size)
+
+
 def test_processor_factory_discovery_and_serialization(tmp_path) -> None:
     config = TurboVLAConfig(device="cpu")
     preprocessor, postprocessor = make_pre_post_processors(config, dataset_stats=make_stats(config))
