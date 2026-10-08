@@ -4,10 +4,12 @@
 import sys
 import types
 
+import pytest
 import torch
 from torch import nn
 
 from lerobot.policies import get_policy_class
+from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.policies.turbovla.bert import BertModelWarper
 from lerobot.policies.turbovla.configuration_turbovla import TurboVLAConfig
 from lerobot.policies.turbovla.modeling_turbovla import TurboVLAPolicy, _make_upstream_config
@@ -302,6 +304,47 @@ def test_action_queue_and_reset() -> None:
     assert len(policy._action_queue) == 1
     policy.reset()
     assert len(policy._action_queue) == 0
+
+
+def test_rtc_blends_unexecuted_prefix_and_rejects_single_action_api() -> None:
+    config = TurboVLAConfig(device="cpu", precision="float32")
+    policy = TurboVLAPolicy(config, model=SyntheticTurboVLA(config))
+    config.rtc_config = RTCConfig(enabled=True, execution_horizon=4)
+    policy.init_rtc_processor()
+    batch = make_batch(config, 2)
+    previous = torch.full((2, 4, config.action_dim), 0.75)
+
+    actions = policy.predict_action_chunk(batch, inference_delay=2, prev_chunk_left_over=previous)
+
+    # The delay prefix is retained exactly, and the RTC schedule fades from it
+    # into a newly predicted suffix over the execution horizon.
+    torch.testing.assert_close(actions[:, :2], previous[:, :2])
+    assert not torch.equal(actions[:, 2], previous[:, 2])
+    with pytest.raises(AssertionError, match="RTC is not supported"):
+        policy.select_action(batch)
+
+
+def test_rtc_arguments_require_rtc_configuration() -> None:
+    config = TurboVLAConfig(device="cpu", precision="float32")
+    policy = TurboVLAPolicy(config, model=SyntheticTurboVLA(config))
+    with pytest.raises(RuntimeError, match="RTC is not configured"):
+        policy.predict_action_chunk(make_batch(config), inference_delay=1, prev_chunk_left_over=torch.zeros(1, 1, 7))
+
+
+def test_rtc_does_not_blend_padded_prefix_rows() -> None:
+    config = TurboVLAConfig(device="cpu", precision="float32")
+    policy = TurboVLAPolicy(config, model=SyntheticTurboVLA(config))
+    config.rtc_config = RTCConfig(enabled=True, execution_horizon=4)
+    policy.init_rtc_processor()
+    batch = make_batch(config, 1)
+    fresh = policy.predict_action_chunk(batch)
+    # The generic engine used to pad this two-action leftover to four rows
+    # with zeros. TurboVLA receives the true variable-length prefix instead.
+    previous = torch.full((1, 2, config.action_dim), 0.75)
+    blended = policy.predict_action_chunk(batch, inference_delay=2, prev_chunk_left_over=previous)
+
+    torch.testing.assert_close(blended[:, :2], previous)
+    torch.testing.assert_close(blended[:, 2:], fresh[:, 2:])
 
 
 def test_save_load_round_trip_without_downloading(monkeypatch, tmp_path) -> None:

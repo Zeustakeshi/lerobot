@@ -15,6 +15,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 from lerobot.utils.import_utils import require_package
 
+from ..rtc.modeling_rtc import RTCProcessor
 from .configuration_turbovla import TurboVLAConfig
 
 
@@ -88,6 +89,19 @@ class TurboVLAPolicy(PreTrainedPolicy):
     config_class = TurboVLAConfig
     name = "turbovla"
     _fsdp_wrap_modules = ["TransformerEncoderLayer", "TransformerDecoderLayer"]
+    # Direct action-space RTC must never blend the zero rows the generic RTC
+    # engine pads onto a short prefix for compiled denoising policies.
+    rtc_accepts_variable_prefix = True
+
+    def supports_rtc(self) -> bool:
+        """Declare compatibility with the asynchronous RTC rollout backend.
+
+        TurboVLA predicts actions directly, unlike flow-matching policies which
+        can apply RTC's Jacobian guidance inside every denoising step.  Its RTC
+        implementation therefore preserves the unexecuted action prefix and
+        smoothly hands control back to the newly predicted suffix.
+        """
+        return True
 
     def __init__(self, config: TurboVLAConfig, *, model: nn.Module | None = None, **kwargs: object) -> None:
         del kwargs
@@ -97,10 +111,80 @@ class TurboVLAPolicy(PreTrainedPolicy):
         if model is None:
             model = _build_model(config)
         self.model = model
+        self.init_rtc_processor()
         self.reset()
 
     def reset(self) -> None:
         self._action_queue: deque[Tensor] = deque(maxlen=self.config.n_action_steps)
+
+    def init_rtc_processor(self) -> None:
+        """Initialize the shared RTC schedule helper after rollout enables RTC.
+
+        The rollout context attaches ``rtc_config`` to a loaded policy and then
+        calls this method.  ``mode='trained'`` is deliberately rejected by
+        :class:`RTCProcessor`: TurboVLA checkpoints are not trained for that
+        inpainting mode.
+        """
+        self.rtc_processor = None
+        if self.config.rtc_config is not None:
+            self.rtc_processor = RTCProcessor(self.config.rtc_config)
+
+    def _rtc_enabled(self) -> bool:
+        return self.config.rtc_config is not None and self.config.rtc_config.enabled
+
+    def _apply_rtc_prefix(
+        self,
+        actions: Tensor,
+        *,
+        inference_delay: int | None,
+        prev_chunk_left_over: Tensor | None,
+        execution_horizon: int | None,
+    ) -> Tensor:
+        """Blend the prior unexecuted prefix into a direct action prediction.
+
+        Direct regression has no latent denoising trajectory on which to apply
+        RTC guidance.  The equivalent safe operation is prefix inpainting in
+        action space: actions already planned for the overlap are retained at
+        the front, then the configured attention schedule fades into TurboVLA's
+        fresh prediction.  This keeps the action timestamps aligned when the
+        RTC worker discards actions produced during inference latency.
+        """
+        if prev_chunk_left_over is None:
+            return actions
+        if not isinstance(prev_chunk_left_over, Tensor):
+            raise TypeError("prev_chunk_left_over must be a torch.Tensor for TurboVLA RTC")
+        if self.rtc_processor is None:
+            raise RuntimeError("TurboVLA RTC is enabled but its processor is not initialized")
+
+        previous = prev_chunk_left_over
+        if previous.ndim == 2:
+            previous = previous.unsqueeze(0)
+        if previous.ndim != 3:
+            raise ValueError("prev_chunk_left_over must have shape [T, A] or [B, T, A] for TurboVLA RTC")
+        if previous.shape[0] == 1 and actions.shape[0] > 1:
+            previous = previous.expand(actions.shape[0], -1, -1)
+        if previous.shape[0] != actions.shape[0]:
+            raise ValueError("prev_chunk_left_over batch size must match the TurboVLA batch size")
+        if previous.shape[2] != actions.shape[2]:
+            raise ValueError("prev_chunk_left_over action dimension must match TurboVLA action_dim")
+
+        horizon = self.config.rtc_config.execution_horizon if execution_horizon is None else execution_horizon
+        if horizon < 0:
+            raise ValueError("execution_horizon must be non-negative")
+        delay = max(0, 0 if inference_delay is None else int(inference_delay))
+        prefix_steps = min(previous.shape[1], actions.shape[1])
+        if prefix_steps == 0 or horizon == 0:
+            return actions
+
+        weights = self.rtc_processor.get_prefix_weights(delay, horizon, actions.shape[1]).to(
+            device=actions.device, dtype=actions.dtype
+        )
+        weights = weights[:prefix_steps].view(1, prefix_steps, 1)
+        result = actions.clone()
+        result[:, :prefix_steps] = torch.lerp(
+            actions[:, :prefix_steps], previous[:, :prefix_steps].to(device=actions.device, dtype=actions.dtype), weights
+        )
+        return result
 
     def get_optim_params(self):
         return self.parameters()
@@ -165,13 +249,36 @@ class TurboVLAPolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, object], **kwargs: object) -> Tensor:
-        del kwargs
+        inference_delay = kwargs.get("inference_delay")
+        prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
+        execution_horizon = kwargs.get("execution_horizon")
+        if (inference_delay is not None or prev_chunk_left_over is not None) and not self._rtc_enabled():
+            raise RuntimeError(
+                "Received RTC arguments but RTC is not configured for this TurboVLA policy: set "
+                "config.rtc_config and call init_rtc_processor() (lerobot-rollout does this for "
+                "--inference.type=rtc)."
+            )
+        if inference_delay is not None and not isinstance(inference_delay, int):
+            raise TypeError("inference_delay must be an int or None for TurboVLA RTC")
+        if execution_horizon is not None and not isinstance(execution_horizon, int):
+            raise TypeError("execution_horizon must be an int or None for TurboVLA RTC")
+        if prev_chunk_left_over is not None and not isinstance(prev_chunk_left_over, Tensor):
+            raise TypeError("prev_chunk_left_over must be a torch.Tensor or None for TurboVLA RTC")
         self.eval()
-        return self._predict(batch)
+        actions = self._predict(batch)
+        if self._rtc_enabled():
+            actions = self._apply_rtc_prefix(
+                actions,
+                inference_delay=inference_delay,
+                prev_chunk_left_over=prev_chunk_left_over,
+                execution_horizon=execution_horizon,
+            )
+        return actions
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, object], **kwargs: object) -> Tensor:
         del kwargs
+        assert not self._rtc_enabled(), "RTC is not supported for select_action, use it with predict_action_chunk"
         self.eval()
         if not self._action_queue:
             actions = self._predict(batch)[:, : self.config.n_action_steps]

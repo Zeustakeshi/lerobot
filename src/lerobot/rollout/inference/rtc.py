@@ -206,6 +206,22 @@ class RTCInferenceEngine(InferenceEngine):
         self._device = device or "cpu"
         self._use_torch_compile = use_torch_compile
         self._compile_warmup_inferences = compile_warmup_inferences
+        action_chunk_size = int(getattr(policy.config, "chunk_size", 0))
+        if action_chunk_size > 0 and rtc_queue_threshold >= action_chunk_size:
+            # RTC replaces (rather than appends to) the queue. A threshold at
+            # or above the entire action chunk makes a short-horizon policy
+            # infer in a tight loop and replace its queue before control can
+            # consume it. Pi-style policies usually have 50-step chunks, but
+            # TurboVLA's 12-step chunk exposes this default mismatch.
+            adjusted_threshold = max(0, action_chunk_size // 2)
+            logger.warning(
+                "RTC queue_threshold=%d is at least the policy action chunk (%d); "
+                "using %d so actions can be executed before the next replacement.",
+                rtc_queue_threshold,
+                action_chunk_size,
+                adjusted_threshold,
+            )
+            rtc_queue_threshold = adjusted_threshold
         self._rtc_queue_threshold = rtc_queue_threshold
 
         self._action_queue: ActionQueue | None = None
@@ -495,7 +511,9 @@ class RTCInferenceEngine(InferenceEngine):
                                         policy_device=policy_device,
                                     )
 
-                        if prev_actions is not None:
+                        if prev_actions is not None and not getattr(
+                            self._policy, "rtc_accepts_variable_prefix", False
+                        ):
                             prev_actions = _normalize_prev_actions_length(
                                 prev_actions, target_steps=self._rtc_config.execution_horizon
                             )

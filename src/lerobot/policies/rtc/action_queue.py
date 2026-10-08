@@ -212,6 +212,14 @@ class ActionQueue:
             task: Instruction that generated the chunk; labels every queued action.
         """
         clamped_delay = max(0, min(real_delay, len(original_actions), len(processed_actions)))
+        if clamped_delay >= len(processed_actions):
+            logger.warning(
+                "RTC action chunk was fully consumed during inference "
+                "(delay=%d steps, chunk=%d steps); no action is available until the next chunk. "
+                "Lower --fps, reduce inference latency, or use a policy with a longer action chunk.",
+                real_delay,
+                len(processed_actions),
+            )
         self.original_queue = original_actions[clamped_delay:].clone()
         self.queue = processed_actions[clamped_delay:].clone()
         self._task_queue = [task] * len(self.queue)
@@ -269,7 +277,11 @@ class ActionQueue:
         if action_index_before_inference is not None:
             indexes_diff = max(0, self.last_index - action_index_before_inference)
             if indexes_diff != real_delay:
-                logger.info(
+                # A fast background inference often completes before the main
+                # control thread consumes another action. This is expected;
+                # retain the conservative wall-clock delay but avoid flooding
+                # normal rollout logs.
+                logger.debug(
                     "Indexes diff is not equal to real delay. indexes_diff=%d, real_delay=%d",
                     indexes_diff,
                     real_delay,

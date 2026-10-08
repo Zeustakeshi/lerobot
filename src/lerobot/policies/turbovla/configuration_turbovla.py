@@ -19,6 +19,7 @@ from typing import Literal
 
 from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
 from lerobot.optim import AdamWConfig
+from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 
 TurboVLAVariant = Literal["custom", "libero", "robotwin"]
@@ -67,6 +68,10 @@ class TurboVLAConfig(PreTrainedConfig):
     action_dim: int = 7
     chunk_size: int = 12
     n_action_steps: int = 12
+
+    # Populated by ``lerobot-rollout --inference.type=rtc`` after loading a
+    # checkpoint. ``None`` keeps the regular synchronous/chunked behavior.
+    rtc_config: RTCConfig | None = None
 
     vision_encoder_id: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
     vision_encoder_revision: str | None = None
