@@ -85,6 +85,27 @@ def test_libero_camera_orientation_and_dino_normalization_match_upstream_recipe(
         torch.testing.assert_close(policy_step._prepare_image(key, rotated[key]), expected, rtol=0, atol=0)
 
 
+def test_camera_images_are_resized_before_normalization() -> None:
+    config = TurboVLAConfig(device="cpu")
+    policy_step = TurboVLAInputProcessorStep(
+        image_keys=config.image_keys,
+        image_size=config.image_size,
+        state_dim=config.state_dim,
+        resize_images=True,
+        interpolation="nearest",
+        image_mean=(0.0, 0.0, 0.0),
+        image_std=(1.0, 1.0, 1.0),
+    )
+    camera_image = torch.arange(3 * 480 * 640, dtype=torch.int64).remainder(256).to(torch.uint8)
+    camera_image = camera_image.reshape(1, 3, 480, 640)
+
+    actual = policy_step._prepare_image(config.image_keys[0], camera_image)
+
+    assert actual.shape == (1, 3, 256, 256)
+    expected = torch.nn.functional.interpolate(camera_image.float() / 255.0, size=(256, 256), mode="nearest")
+    torch.testing.assert_close(actual, expected)
+
+
 def test_processor_save_load_is_golden_equivalent(tmp_path) -> None:
     config = TurboVLAConfig(device="cpu")
     preprocessor, postprocessor = make_pre_post_processors(config, dataset_stats=make_stats(config))

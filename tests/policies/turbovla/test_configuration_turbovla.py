@@ -77,6 +77,25 @@ def test_custom_config_accepts_differently_sized_cameras_by_enabling_resize() ->
     assert config.resize_images
 
 
+def test_custom_variant_allows_camera_resize() -> None:
+    config = TurboVLAConfig(
+        variant="custom",
+        image_keys=("observation.images.wrist", "observation.images.top"),
+        state_dim=6,
+        action_dim=6,
+        resize_images=True,
+        input_features={
+            "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 720, 1280)),
+            "observation.images.top": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 480, 640)),
+            "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(6,)),
+            OBS_LANGUAGE: PolicyFeature(type=FeatureType.LANGUAGE, shape=(1,)),
+        },
+        output_features={"action": PolicyFeature(type=FeatureType.ACTION, shape=(6,))},
+    )
+
+    config.validate_features()
+
+
 def test_config_save_load_routes_through_base_class(tmp_path) -> None:
     config = TurboVLAConfig.robotwin(device="cpu")
     config.save_pretrained(tmp_path)
