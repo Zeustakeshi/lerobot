@@ -101,18 +101,35 @@ class TurboVLAPolicy(PreTrainedPolicy):
         implementation therefore preserves the unexecuted action prefix and
         smoothly hands control back to the newly predicted suffix.
         """
-        return True
+        return self.config.inference_backend == "pytorch"
 
     def __init__(self, config: TurboVLAConfig, *, model: nn.Module | None = None, **kwargs: object) -> None:
         del kwargs
         super().__init__(config)
         config.validate_features()
         self.config = config
-        if model is None:
+        self._vla_cpp_client = None
+        if config.inference_backend == "vla_cpp":
+            from .vla_cpp import VlaCppTurboVLAClient
+
+            self.model = nn.Identity()
+            self._vla_cpp_client = VlaCppTurboVLAClient(config)
+        elif model is None:
             model = _build_model(config)
-        self.model = model
+            self.model = model
+        else:
+            self.model = model
         self.init_rtc_processor()
         self.reset()
+
+    @classmethod
+    def from_pretrained(cls, pretrained_name_or_path, *, config=None, **kwargs):
+        """Avoid loading model.safetensors when inference is delegated to vla.cpp."""
+        if isinstance(config, TurboVLAConfig) and config.inference_backend == "vla_cpp":
+            instance = cls(config)
+            instance.eval()
+            return instance
+        return super().from_pretrained(pretrained_name_or_path, config=config, **kwargs)
 
     def reset(self) -> None:
         self._action_queue: deque[Tensor] = deque(maxlen=self.config.n_action_steps)
@@ -220,6 +237,8 @@ class TurboVLAPolicy(PreTrainedPolicy):
         return instructions, pixel_values, state
 
     def _predict(self, batch: dict[str, object]) -> Tensor:
+        if self._vla_cpp_client is not None:
+            return self._vla_cpp_client.predict(batch)
         instructions, pixel_values, state = self._prepare_inputs(batch)
         actions = self.model(instructions, {"dinov3": pixel_values}, state)
         expected = (pixel_values.shape[0], self.config.chunk_size, self.config.action_dim)

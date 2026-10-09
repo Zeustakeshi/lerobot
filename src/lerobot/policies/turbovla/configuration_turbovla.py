@@ -68,6 +68,11 @@ class TurboVLAConfig(PreTrainedConfig):
     action_dim: int = 7
     chunk_size: int = 12
     n_action_steps: int = 12
+    # ``vla_cpp`` delegates inference and all checkpoint transforms to a
+    # running vla-server. The default preserves normal PyTorch behavior.
+    inference_backend: Literal["pytorch", "vla_cpp"] = "pytorch"
+    vla_cpp_addr: str = "tcp://127.0.0.1:5555"
+    vla_cpp_timeout_ms: int = 30_000
 
     # Populated by ``lerobot-rollout --inference.type=rtc`` after loading a
     # checkpoint. ``None`` keeps the regular synchronous/chunked behavior.
@@ -126,6 +131,10 @@ class TurboVLAConfig(PreTrainedConfig):
             raise ValueError(f"variant must be 'custom', 'libero', or 'robotwin', got {self.variant!r}")
         if self.chunk_size < 1 or self.n_action_steps < 1 or self.n_action_steps > self.chunk_size:
             raise ValueError("n_action_steps must be between 1 and chunk_size")
+        if self.inference_backend not in ("pytorch", "vla_cpp"):
+            raise ValueError("inference_backend must be 'pytorch' or 'vla_cpp'")
+        if self.vla_cpp_timeout_ms < 1:
+            raise ValueError("vla_cpp_timeout_ms must be positive")
         if self.precision not in ("bfloat16", "float32"):
             raise ValueError("precision must be 'bfloat16' or 'float32'")
         if self.config_schema_version != 1 or self.processor_schema_version != 1:

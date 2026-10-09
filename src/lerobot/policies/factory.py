@@ -50,6 +50,7 @@ from .evo1.configuration_evo1 import Evo1Config
 from .groot.configuration_groot import GrootConfig
 from .molmoact2.configuration_molmoact2 import MolmoAct2Config
 from .pretrained import PreTrainedPolicy
+from .turbovla.configuration_turbovla import TurboVLAConfig
 from .utils import validate_visual_features_consistency
 
 if TYPE_CHECKING or _peft_available:
@@ -238,6 +239,10 @@ def make_pre_post_processors(
             revision=pretrained_revision,
         )
         _reconnect_relative_absolute_steps(preprocessor, postprocessor)
+        if isinstance(policy_cfg, TurboVLAConfig) and policy_cfg.inference_backend == "vla_cpp":
+            from .turbovla.processor_turbovla import configure_vla_cpp_processors
+
+            configure_vla_cpp_processors(preprocessor, postprocessor)
         if isinstance(policy_cfg, Evo1Config):
             from .evo1.processor_evo1 import reconcile_evo1_processors
 
