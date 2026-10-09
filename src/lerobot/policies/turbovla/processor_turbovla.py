@@ -22,7 +22,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F  # noqa: N812
 
-from lerobot.configs import PipelineFeatureType, PolicyFeature
+from lerobot.configs import FeatureType, NormalizationMode, PipelineFeatureType, PolicyFeature
 from lerobot.lerobot_types import RobotObservation, TransitionKey
 from lerobot.processor import (
     ObservationProcessorStep,
@@ -32,6 +32,7 @@ from lerobot.processor import (
     make_default_policy_processor_steps,
     make_policy_processor_pipelines,
 )
+from lerobot.processor.normalize_processor import NormalizerProcessorStep, UnnormalizerProcessorStep
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 
 from .configuration_turbovla import TurboVLAConfig
@@ -55,6 +56,7 @@ class TurboVLAInputProcessorStep(ObservationProcessorStep):
     interpolation: str = "bilinear"
     image_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
     image_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
+    normalize_images: bool = True
 
     def __post_init__(self) -> None:
         self.image_keys = tuple(self.image_keys)
@@ -107,6 +109,8 @@ class TurboVLAInputProcessorStep(ObservationProcessorStep):
                 f"TurboVLA camera {key!r} must already be {self.image_size} after optional crop; "
                 f"got {tuple(image.shape[-2:])}. Enable resize_images to resize dataset cameras."
             )
+        if not self.normalize_images:
+            return image.contiguous()
         mean = torch.tensor(self.image_mean, dtype=image.dtype, device=image.device).view(1, 3, 1, 1)
         std = torch.tensor(self.image_std, dtype=image.dtype, device=image.device).view(1, 3, 1, 1)
         return ((image - mean) / std).contiguous()
@@ -178,6 +182,7 @@ class TurboVLAInputProcessorStep(ObservationProcessorStep):
             "interpolation": self.interpolation,
             "image_mean": self.image_mean,
             "image_std": self.image_std,
+            "normalize_images": self.normalize_images,
         }
 
     def transform_features(
@@ -250,7 +255,7 @@ def make_turbovla_pre_post_processors(
         image_mean=config.image_mean,
         image_std=config.image_std,
     )
-    return make_policy_processor_pipelines(
+    pipelines = make_policy_processor_pipelines(
         input_steps=[
             steps.rename_observations,
             steps.add_batch_dim,
@@ -260,3 +265,26 @@ def make_turbovla_pre_post_processors(
         ],
         output_steps=[steps.unnormalize, steps.to_cpu],
     )
+    if config.inference_backend == "vla_cpp":
+        configure_vla_cpp_processors(*pipelines)
+    return pipelines
+
+
+def configure_vla_cpp_processors(
+    preprocessor: PolicyProcessorPipeline, postprocessor: PolicyProcessorPipeline
+) -> None:
+    """Make loaded TurboVLA processor files pass raw observations/actions.
+
+    Existing checkpoints serialize PyTorch's ImageNet/state/action transforms.
+    vla-server embeds and applies the same transforms from GGUF metadata, so
+    retaining either side would silently normalize twice.
+    """
+    for step in preprocessor.steps:
+        if isinstance(step, TurboVLAInputProcessorStep):
+            step.normalize_images = False
+        if isinstance(step, NormalizerProcessorStep):
+            step.normalize_observation_keys = set()
+    for step in postprocessor.steps:
+        if isinstance(step, UnnormalizerProcessorStep):
+            step.norm_map = dict(step.norm_map)
+            step.norm_map[FeatureType.ACTION] = NormalizationMode.IDENTITY
