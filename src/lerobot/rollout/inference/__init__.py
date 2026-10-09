@@ -14,7 +14,7 @@
 
 """Inference engine package — backend-agnostic action production.
 
-Concrete backends (``sync``, ``rtc``, ...) expose the same small interface so
+Concrete backends (``sync``, ``rtc``, ``vla_cpp_async``, ...) expose the same small interface so
 rollout strategies never branch on which backend is in use.
 """
 
@@ -23,10 +23,12 @@ from .factory import (
     InferenceEngineConfig,
     RTCInferenceConfig,
     SyncInferenceConfig,
+    VlaCppAsyncInferenceConfig,
     create_inference_engine,
 )
 from .rtc import RTCInferenceEngine
 from .sync import SyncInferenceEngine
+from .vla_cpp_async import VlaCppAsyncInferenceEngine
 
 __all__ = [
     "InferenceEngine",
@@ -38,5 +40,7 @@ __all__ = [
     "RTCInferenceEngine",
     "SyncInferenceConfig",
     "SyncInferenceEngine",
+    "VlaCppAsyncInferenceConfig",
+    "VlaCppAsyncInferenceEngine",
     "create_inference_engine",
 ]

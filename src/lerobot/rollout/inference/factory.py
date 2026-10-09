@@ -14,7 +14,7 @@
 
 """Inference engine configs and factory.
 
-Selection is explicit via ``--inference.type=sync|rtc``.  Adding a new
+Selection is explicit via ``--inference.type=sync|rtc|vla_cpp_async``.  Adding a new
 backend requires registering its config subclass and dispatching it in
 :func:`create_inference_engine`.
 """
@@ -36,6 +36,7 @@ from ..robot_wrapper import ThreadSafeRobot
 from .base import InferenceEngine
 from .rtc import RTCInferenceEngine
 from .sync import SyncInferenceEngine
+from .vla_cpp_async import VlaCppAsyncInferenceEngine
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,14 @@ class RTCInferenceConfig(InferenceEngineConfig):
     # (e.g. ``--inference.rtc.execution_horizon=...``).
     rtc: RTCConfig = field(default_factory=RTCConfig)
     queue_threshold: int = 30
+
+
+@InferenceEngineConfig.register_subclass("vla_cpp_async")
+@dataclass
+class VlaCppAsyncInferenceConfig(InferenceEngineConfig):
+    """Async vla.cpp prefetching without Real-Time Chunking blending."""
+
+    queue_threshold: int = 6
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +132,18 @@ def create_inference_engine(
             use_torch_compile=use_torch_compile,
             compile_warmup_inferences=compile_warmup_inferences,
             rtc_queue_threshold=config.queue_threshold,
+            shutdown_event=shutdown_event,
+        )
+    if isinstance(config, VlaCppAsyncInferenceConfig):
+        return VlaCppAsyncInferenceEngine(
+            policy=policy,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+            robot_wrapper=robot_wrapper,
+            hw_features=hw_features,
+            task=task,
+            device=device,
+            queue_threshold=config.queue_threshold,
             shutdown_event=shutdown_event,
         )
     raise ValueError(f"Unknown inference engine type: {type(config).__name__}")
