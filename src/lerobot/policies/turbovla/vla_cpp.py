@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from threading import Lock
 
 import torch
 from torch import Tensor
@@ -33,12 +34,11 @@ class VlaCppTurboVLAClient:
         self.config = config
         self._zmq = zmq
         self._context = zmq.Context.instance()
-        self._socket = self._context.socket(zmq.REQ)
-        self._socket.setsockopt(zmq.LINGER, 0)
-        timeout = int(config.vla_cpp_timeout_ms)
-        self._socket.setsockopt(zmq.RCVTIMEO, timeout)
-        self._socket.setsockopt(zmq.SNDTIMEO, timeout)
-        self._socket.connect(config.vla_cpp_addr)
+        # A ZeroMQ socket has thread affinity.  The async rollout engine creates
+        # this policy on the control thread but performs every request on its
+        # worker thread, so defer socket creation until the first request.
+        self._socket = None
+        self._socket_lock = Lock()
         self._tokenizer = AutoTokenizer.from_pretrained(
             config.language_encoder_id,
             revision=config.language_encoder_revision,
@@ -48,7 +48,23 @@ class VlaCppTurboVLAClient:
         self._request_id = 0
 
     def close(self) -> None:
-        self._socket.close(linger=0)
+        with self._socket_lock:
+            if self._socket is not None:
+                self._socket.close(linger=0)
+                self._socket = None
+
+    def _get_socket(self):
+        """Create the REQ socket on the thread that will use it."""
+        with self._socket_lock:
+            if self._socket is None:
+                socket = self._context.socket(self._zmq.REQ)
+                socket.setsockopt(self._zmq.LINGER, 0)
+                timeout = int(self.config.vla_cpp_timeout_ms)
+                socket.setsockopt(self._zmq.RCVTIMEO, timeout)
+                socket.setsockopt(self._zmq.SNDTIMEO, timeout)
+                socket.connect(self.config.vla_cpp_addr)
+                self._socket = socket
+            return self._socket
 
     def _instructions(self, language: object, batch_size: int) -> list[str]:
         if isinstance(language, str):
@@ -121,9 +137,13 @@ class VlaCppTurboVLAClient:
         request.state.extend(float(value) for value in state_values.tolist())
 
         try:
-            self._socket.send(request.SerializeToString())
-            payload = self._socket.recv()
+            socket = self._get_socket()
+            socket.send(request.SerializeToString())
+            payload = socket.recv()
         except self._zmq.Again as exc:
+            # A REQ socket that timed out receiving cannot send another
+            # request.  Recreate it for the async worker's retry.
+            self.close()
             raise TimeoutError(
                 f"No response from vla-server at {self.config.vla_cpp_addr} within "
                 f"{self.config.vla_cpp_timeout_ms} ms"

@@ -57,6 +57,7 @@ from .inference import (
     InferenceEngine,
     RTCInferenceConfig,
     SyncInferenceConfig,
+    VlaCppAsyncInferenceConfig,
     create_inference_engine,
 )
 from .inference.rtc import supports_rtc_inference
@@ -311,6 +312,7 @@ def build_rollout_context(
     ``ValueError`` before any policy access.
     """
     is_rtc = isinstance(cfg.inference, RTCInferenceConfig)
+    is_vla_cpp_async = isinstance(cfg.inference, VlaCppAsyncInferenceConfig)
 
     # --- 1. Policy (heavy I/O, but no hardware yet) -------------------
     policy_config = cfg.policy
@@ -334,6 +336,14 @@ def build_rollout_context(
 
     policy = _load_pretrained_policy(policy_config)
 
+    if is_vla_cpp_async and (
+        policy_config.type != "turbovla" or getattr(policy_config, "inference_backend", None) != "vla_cpp"
+    ):
+        raise ValueError(
+            "--inference.type=vla_cpp_async requires TurboVLA with "
+            "--policy.inference_backend=vla_cpp."
+        )
+
     if is_rtc:
         if not supports_rtc_inference(policy):
             raise ValueError(
@@ -350,7 +360,10 @@ def build_rollout_context(
     logger.info("Policy loaded: type=%s, device=%s", policy_config.type, cfg.device)
 
     torch_compile_active = cfg.use_torch_compile
-    if cfg.use_torch_compile and policy.type not in ("pi0", "pi05"):
+    if is_vla_cpp_async and cfg.use_torch_compile:
+        logger.warning("torch.compile is ignored by vla_cpp_async because inference runs in vla-server")
+        torch_compile_active = False
+    elif cfg.use_torch_compile and policy.type not in ("pi0", "pi05"):
         torch_compile_active = _wrap_predict_action_chunk_with_torch_compile(
             policy,
             backend=cfg.torch_compile_backend,
