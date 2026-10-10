@@ -33,12 +33,15 @@ _JOIN_TIMEOUT_S = 3.0
 
 
 class VlaCppAsyncInferenceEngine(InferenceEngine):
-    """Prefetch full action chunks on one worker without RTC semantics.
+    """Execute fresh vla.cpp action chunks on one worker without RTC semantics.
 
     The worker is the sole caller of ``predict_action_chunk``.  This is
     essential for pyzmq because the vla.cpp REQ socket is not thread-safe.
-    ``queue_threshold`` controls when it starts the next request; choose a
-    value below the checkpoint's chunk size so the queue has room to drain.
+    TurboVLA emits absolute targets, not deltas.  Predicting a replacement
+    chunk from an observation captured while old targets remain queued makes
+    that response stale before it can be dispatched and can pull a robot back
+    toward an earlier pose.  Therefore a request starts only after the queue
+    drains.  Inference still runs outside the control thread.
     """
 
     def __init__(
@@ -60,15 +63,12 @@ class VlaCppAsyncInferenceEngine(InferenceEngine):
         chunk_size = int(getattr(policy.config, "chunk_size", 0))
         if chunk_size < 1:
             raise ValueError("vla_cpp_async requires a policy with a positive chunk_size")
-        if queue_threshold >= chunk_size:
-            adjusted = max(0, chunk_size // 2)
+        if queue_threshold != 0:
             logger.warning(
-                "vla_cpp_async queue_threshold=%d is at least chunk_size=%d; using %d",
+                "vla_cpp_async queue_threshold=%d is unsafe for absolute action chunks; using 0",
                 queue_threshold,
-                chunk_size,
-                adjusted,
             )
-            queue_threshold = adjusted
+            queue_threshold = 0
 
         self._policy = policy
         self._preprocessor = preprocessor

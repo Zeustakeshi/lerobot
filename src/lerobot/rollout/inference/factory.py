@@ -78,9 +78,14 @@ class RTCInferenceConfig(InferenceEngineConfig):
 @InferenceEngineConfig.register_subclass("vla_cpp_async")
 @dataclass
 class VlaCppAsyncInferenceConfig(InferenceEngineConfig):
-    """Async vla.cpp prefetching without Real-Time Chunking blending."""
+    """Async vla.cpp inference without Real-Time Chunking blending.
 
-    queue_threshold: int = 6
+    TurboVLA action chunks are absolute robot targets.  A chunk predicted
+    while an earlier chunk is still being executed is stale by the time it is
+    dispatched, so this backend intentionally requests only at queue drain.
+    """
+
+    queue_threshold: int = 0
 
 
 # ---------------------------------------------------------------------------
