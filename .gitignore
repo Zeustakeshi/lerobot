@@ -177,3 +177,5 @@ outputs/
 *.xml
 *.part
 /plans/
+
+script_local/
