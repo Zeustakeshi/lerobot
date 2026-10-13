@@ -90,9 +90,7 @@ def test_rtc_blends_previous_prefix_and_is_detected_by_rollout() -> None:
     policy.init_rtc_processor()
     previous = torch.full((2, 6), 0.75)
 
-    actions = policy.predict_action_chunk(
-        _batch(), inference_delay=2, prev_chunk_left_over=previous
-    )
+    actions = policy.predict_action_chunk(_batch(), inference_delay=2, prev_chunk_left_over=previous)
 
     assert supports_rtc_inference(policy)
     torch.testing.assert_close(actions[:, :2], previous[None, :2])
@@ -105,6 +103,17 @@ def test_rtc_blends_previous_prefix_and_is_detected_by_rollout() -> None:
 def test_rtc_arguments_require_rollout_configuration() -> None:
     policy = TIPSGroundVLAPolicy(_config(), model=_StubModel())
     with pytest.raises(RuntimeError, match="require --inference.type=rtc"):
-        policy.predict_action_chunk(
-            _batch(), inference_delay=1, prev_chunk_left_over=torch.zeros(1, 6)
-        )
+        policy.predict_action_chunk(_batch(), inference_delay=1, prev_chunk_left_over=torch.zeros(1, 6))
+
+
+def test_policy_optimizer_preset_honors_policy_level_overrides() -> None:
+    config = _config()
+    config.optimizer_lr = 5e-5
+    config.optimizer_weight_decay = 0.01
+    config.optimizer_grad_clip_norm = 1.0
+
+    optimizer = config.get_optimizer_preset()
+
+    assert optimizer.lr == 5e-5
+    assert optimizer.weight_decay == 0.01
+    assert optimizer.grad_clip_norm == 1.0

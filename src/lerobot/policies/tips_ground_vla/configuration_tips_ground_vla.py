@@ -45,6 +45,7 @@ class TIPSGroundVLAConfig(PreTrainedConfig):
     lambda_spatial: float = 0.05
     optimizer_lr: float = 1e-4
     optimizer_weight_decay: float = 1e-4
+    optimizer_grad_clip_norm: float = 1.0
     input_features: dict[str, PolicyFeature] | None = None
     output_features: dict[str, PolicyFeature] | None = None
     normalization_mapping: dict[str, NormalizationMode] = field(
@@ -103,7 +104,11 @@ class TIPSGroundVLAConfig(PreTrainedConfig):
             raise ValueError("TIPS-Ground-VLA requires language, state, and action features")
 
     def get_optimizer_preset(self) -> AdamWConfig:
-        return AdamWConfig(lr=self.optimizer_lr, weight_decay=self.optimizer_weight_decay)
+        return AdamWConfig(
+            lr=self.optimizer_lr,
+            weight_decay=self.optimizer_weight_decay,
+            grad_clip_norm=self.optimizer_grad_clip_norm,
+        )
 
     def get_scheduler_preset(self):
         return None
