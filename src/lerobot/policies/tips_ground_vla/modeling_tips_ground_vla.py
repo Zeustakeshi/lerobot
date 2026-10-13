@@ -53,7 +53,7 @@ class TeacherTargetGenerator:
     """Frozen TIPSv2/DINOv3 teachers used only while computing training losses."""
 
     def __init__(self, config: TIPSGroundVLAConfig) -> None:
-        require_package("transformers", extra="tips-ground-vla")
+        require_package("transformers", extra="tips_ground_vla")
         from transformers import AutoImageProcessor, AutoModel
 
         tips_source = config.tips_teacher_path or config.tips_teacher_id
@@ -62,17 +62,19 @@ class TeacherTargetGenerator:
         self.tips = AutoModel.from_pretrained(
             tips_source,
             trust_remote_code=True,
+            cache_dir=config.hub_cache_dir,
             local_files_only=config.local_files_only,
             torch_dtype=tips_dtype,
         ).eval()
         self.dino = AutoModel.from_pretrained(
             # DINOv3 ViT-L produces NaNs in fp16 on RTX 3050; keep this frozen teacher in fp32.
             dino_source,
+            cache_dir=config.hub_cache_dir,
             local_files_only=config.local_files_only,
             torch_dtype=torch.float32,
         ).eval()
         self.dino_processor = AutoImageProcessor.from_pretrained(
-            dino_source, local_files_only=config.local_files_only
+            dino_source, cache_dir=config.hub_cache_dir, local_files_only=config.local_files_only
         )
         for module in (self.tips, self.dino):
             for parameter in module.parameters():
@@ -188,17 +190,21 @@ class TIPSGroundVLA(nn.Module):
         super().__init__()
         self.config = config
         if vision is None or text is None:
-            require_package("timm", extra="tips-ground-vla")
-            require_package("transformers", extra="tips-ground-vla")
+            require_package("timm", extra="tips_ground_vla")
+            require_package("transformers", extra="tips_ground_vla")
             import timm
             from transformers import AutoModel, AutoTokenizer
 
             vision = vision or timm.create_model(config.vision_encoder_id, pretrained=True, num_classes=0)
             text = text or AutoModel.from_pretrained(
-                config.text_encoder_id, local_files_only=config.local_files_only
+                config.text_encoder_id,
+                cache_dir=config.hub_cache_dir,
+                local_files_only=config.local_files_only,
             )
             tokenizer = tokenizer or AutoTokenizer.from_pretrained(
-                config.text_encoder_id, local_files_only=config.local_files_only
+                config.text_encoder_id,
+                cache_dir=config.hub_cache_dir,
+                local_files_only=config.local_files_only,
             )
         self.vision, self.text, self.tokenizer = vision, text, tokenizer
         self.visual_projection = nn.Sequential(nn.Linear(384, 256), nn.LayerNorm(256))
