@@ -34,6 +34,9 @@ class TIPSGroundVLAConfig(PreTrainedConfig):
     tips_teacher_path: str | None = None
     dino_teacher_path: str | None = None
     cache_teacher_targets: bool = False
+    # ``None`` uses Hugging Face's default cache. With ``local_files_only=False``
+    # (the default), all pretrained components are fetched automatically on first use.
+    hub_cache_dir: str | None = None
     local_files_only: bool = False
     freeze_vision_blocks: int = 10
     training_phase: Literal["warmup", "joint"] = "joint"
