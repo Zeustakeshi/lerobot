@@ -21,8 +21,8 @@ class SyntheticTurboVLA(nn.Module):
     def __init__(self, config: TurboVLAConfig) -> None:
         super().__init__()
         self.chunk_size = config.chunk_size
-        self.action_dim = config.action_dim
-        self.projection = nn.Linear(config.state_dim, config.action_dim)
+        self.action_dim = config.model_action_dim
+        self.projection = nn.Linear(config.model_state_dim, config.model_action_dim)
 
     def forward(self, instructions, samples, state):
         assert len(instructions) == state.shape[0]
@@ -151,6 +151,29 @@ def test_synthetic_forward_backward_and_batch_shapes() -> None:
         loss.backward()
         assert policy.model.projection.weight.grad is not None
         policy.zero_grad(set_to_none=True)
+
+
+def test_padded_embodiment_dimensions_are_masked_and_trimmed() -> None:
+    config = TurboVLAConfig(
+        device="cpu",
+        precision="float32",
+        max_state_dim=16,
+        max_action_dim=16,
+    )
+    policy = TurboVLAPolicy(config, model=SyntheticTurboVLA(config))
+    batch = make_batch(config)
+
+    actions = policy.predict_action_chunk(batch)
+    assert actions.shape == (2, config.chunk_size, config.action_dim)
+    loss, _ = policy(batch)
+    loss.backward()
+
+    # Coordinates outside the dataset action schema are model-internal padding
+    # and must not affect the training objective.
+    with torch.no_grad():
+        policy.model.projection.bias[config.action_dim :] = 1e6
+    padded_loss, _ = policy(batch)
+    torch.testing.assert_close(loss.detach(), padded_loss)
 
 
 def test_backbone_revisions_are_forwarded_to_upstream_config() -> None:
@@ -328,7 +351,9 @@ def test_rtc_arguments_require_rtc_configuration() -> None:
     config = TurboVLAConfig(device="cpu", precision="float32")
     policy = TurboVLAPolicy(config, model=SyntheticTurboVLA(config))
     with pytest.raises(RuntimeError, match="RTC is not configured"):
-        policy.predict_action_chunk(make_batch(config), inference_delay=1, prev_chunk_left_over=torch.zeros(1, 1, 7))
+        policy.predict_action_chunk(
+            make_batch(config), inference_delay=1, prev_chunk_left_over=torch.zeros(1, 1, 7)
+        )
 
 
 def test_rtc_does_not_blend_padded_prefix_rows() -> None:

@@ -86,7 +86,28 @@ plus one or more RGB cameras. Cameras may use different source resolutions; the
 custom processor resizes them to the configured square DINOv3 input (256×256 by
 default). A single run uses one fixed state/action schema. Train separate
 checkpoints for robots with different schemas; heterogeneous embodiment padding
-is not implemented yet.
+is not implemented by the dataset loader yet.
+
+To reserve one model head for smaller embodiments, choose maxima larger than the
+current dataset vectors. TurboVLA zero-pads state/action coordinates internally,
+masks the padded action coordinates from the loss, and trims actions back to the
+dataset width for inference. This is useful when deliberately fine-tuning the
+same architecture across compatible datasets, but does not itself enable the
+currently disabled multi-dataset loader.
+
+```bash
+lerobot-train \
+  --policy.type=turbovla \
+  --policy.max_state_dim=32 \
+  --policy.max_action_dim=32 \
+  --policy.chunk_size=50 \
+  --policy.n_action_steps=10 \
+  ...
+```
+
+`chunk_size` remains fixed for a checkpoint because the action decoder allocates
+one learned query per timestep. It is configurable for fresh training; action
+padding/masking covers dimensions, not mixed action horizons within one batch.
 
 The fixed `libero` and `robotwin` presets are retained for converted upstream
 weights. To deliberately train using the fixed LIBERO contract, pass
