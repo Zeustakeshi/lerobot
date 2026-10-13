@@ -249,7 +249,12 @@ lingbot_va = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[ac
 turbovla = ["lerobot[transformers-dep]", "lerobot[timm-dep]"]
 # PyPI normalizes '-' and '_' in extra names, so both
 # ``lerobot[tips_ground_vla]`` and ``lerobot[tips-ground-vla]`` work.
-tips_ground_vla = ["lerobot[transformers-dep]", "lerobot[timm-dep]"]
+tips_ground_vla = [
+    "lerobot[transformers-dep]",
+    "lerobot[timm-dep]",
+    # Required by TIPSv2's Hugging Face remote-code tokenizer/model implementation.
+    "sentencepiece>=0.2.0,<0.3.0",
+]
 
 # Features
 async = ["lerobot[grpcio-dep]", "lerobot[matplotlib-dep]"]

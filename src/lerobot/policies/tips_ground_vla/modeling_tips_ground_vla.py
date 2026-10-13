@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from collections import deque
 from collections.abc import Sequence
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F  # noqa: N812
@@ -15,6 +18,37 @@ from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 from lerobot.utils.import_utils import require_package
 
 from .configuration_tips_ground_vla import TIPSGroundVLAConfig
+
+
+def _resolve_hub_cache_dir(config: TIPSGroundVLAConfig) -> str | None:
+    """Return a usable cache path when a checkpoint was moved between hosts.
+
+    Training configs often capture a machine-specific cache directory (for
+    example ``/content/hf-cache`` on Colab). During inference that path is only
+    a cache hint, not part of the learned model, so an unavailable/unwritable
+    path should fall back to Hugging Face's normal per-user cache.
+    """
+    cache_dir = config.hub_cache_dir
+    if cache_dir is None:
+        return None
+
+    path = Path(cache_dir).expanduser()
+    ancestor = path
+    while not ancestor.exists() and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+    if ancestor.is_dir() and os.access(ancestor, os.W_OK):
+        return str(path)
+    if config.local_files_only:
+        raise OSError(
+            f"Configured hub_cache_dir {cache_dir!r} is not writable on this host and "
+            "local_files_only=True prevents fallback downloads"
+        )
+    logging.warning(
+        "Ignoring unavailable hub_cache_dir=%r stored in the checkpoint; "
+        "using the local Hugging Face cache instead",
+        cache_dir,
+    )
+    return None
 
 
 def _masked_mean(values: Tensor, mask: Tensor) -> Tensor:
@@ -58,23 +92,24 @@ class TeacherTargetGenerator:
 
         tips_source = config.tips_teacher_path or config.tips_teacher_id
         dino_source = config.dino_teacher_path or config.dino_teacher_id
+        hub_cache_dir = _resolve_hub_cache_dir(config)
         tips_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         self.tips = AutoModel.from_pretrained(
             tips_source,
             trust_remote_code=True,
-            cache_dir=config.hub_cache_dir,
+            cache_dir=hub_cache_dir,
             local_files_only=config.local_files_only,
-            torch_dtype=tips_dtype,
+            dtype=tips_dtype,
         ).eval()
         self.dino = AutoModel.from_pretrained(
             # DINOv3 ViT-L produces NaNs in fp16 on RTX 3050; keep this frozen teacher in fp32.
             dino_source,
-            cache_dir=config.hub_cache_dir,
+            cache_dir=hub_cache_dir,
             local_files_only=config.local_files_only,
-            torch_dtype=torch.float32,
+            dtype=torch.float32,
         ).eval()
         self.dino_processor = AutoImageProcessor.from_pretrained(
-            dino_source, cache_dir=config.hub_cache_dir, local_files_only=config.local_files_only
+            dino_source, cache_dir=hub_cache_dir, local_files_only=config.local_files_only
         )
         for module in (self.tips, self.dino):
             for parameter in module.parameters():
@@ -93,6 +128,10 @@ class TeacherTargetGenerator:
         with torch.autocast(device_type=device.type, enabled=False):
             tips_patches = self.tips.encode_image(flat_images.to(dtype=tips_dtype)).patch_tokens
             tips_text = self.tips.encode_text(list(phrases)).to(device=device, dtype=tips_patches.dtype)
+            # ``flat_images`` has one image per camera, while the instruction is
+            # shared by all cameras of a sample. Align their leading dimensions
+            # before producing one patch distribution per camera.
+            tips_text = tips_text.repeat_interleave(cameras, dim=0)
             tips_logits = F.normalize(tips_patches, dim=-1) @ F.normalize(tips_text, dim=-1).unsqueeze(-1)
         tips_logits = tips_logits.squeeze(-1).view(batch, cameras, 16, 16)
         tips_logits = (
@@ -195,15 +234,16 @@ class TIPSGroundVLA(nn.Module):
             import timm
             from transformers import AutoModel, AutoTokenizer
 
+            hub_cache_dir = _resolve_hub_cache_dir(config)
             vision = vision or timm.create_model(config.vision_encoder_id, pretrained=True, num_classes=0)
             text = text or AutoModel.from_pretrained(
                 config.text_encoder_id,
-                cache_dir=config.hub_cache_dir,
+                cache_dir=hub_cache_dir,
                 local_files_only=config.local_files_only,
             )
             tokenizer = tokenizer or AutoTokenizer.from_pretrained(
                 config.text_encoder_id,
-                cache_dir=config.hub_cache_dir,
+                cache_dir=hub_cache_dir,
                 local_files_only=config.local_files_only,
             )
         self.vision, self.text, self.tokenizer = vision, text, tokenizer
