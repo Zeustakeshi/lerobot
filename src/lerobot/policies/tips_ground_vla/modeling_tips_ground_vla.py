@@ -10,6 +10,7 @@ import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
 
 from lerobot.policies.pretrained import PreTrainedPolicy
+from lerobot.policies.rtc.modeling_rtc import RTCProcessor
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 from lerobot.utils.import_utils import require_package
 
@@ -352,6 +353,16 @@ class TIPSGroundVLA(nn.Module):
 
 class TIPSGroundVLAPolicy(PreTrainedPolicy):
     config_class, name = TIPSGroundVLAConfig, "tips_ground_vla"
+    # ``lerobot-rollout`` drops queued actions when the task changes.  This
+    # policy intentionally uses a small private FIFO instead of the common
+    # ``_action_queue`` name, so declare it to the base-class queue contract.
+    _action_queue_attrs = (*PreTrainedPolicy._action_queue_attrs, "_queue")
+    # Direct action-space RTC must receive the real leftover length. Padding a
+    # short prefix with zeros would blend invalid actions into the prediction.
+    rtc_accepts_variable_prefix = True
+
+    def supports_rtc(self) -> bool:
+        return True
 
     def __init__(self, config: TIPSGroundVLAConfig, *, model: nn.Module | None = None, **kwargs) -> None:
         super().__init__(config)
@@ -360,7 +371,59 @@ class TIPSGroundVLAPolicy(PreTrainedPolicy):
         self.model = model or TIPSGroundVLA(config)
         # Keep teachers outside ``nn.Module``: training checkpoints must only contain the student.
         object.__setattr__(self, "_teachers", None)
+        self.init_rtc_processor()
         self.reset()
+
+    def init_rtc_processor(self) -> None:
+        """Initialize action-space RTC after the rollout context injects its config."""
+        self.rtc_processor = None
+        if self.config.rtc_config is not None:
+            self.rtc_processor = RTCProcessor(self.config.rtc_config)
+
+    def _rtc_enabled(self) -> bool:
+        return self.config.rtc_config is not None and self.config.rtc_config.enabled
+
+    def _apply_rtc_prefix(
+        self,
+        actions: Tensor,
+        *,
+        inference_delay: int | None,
+        prev_chunk_left_over: Tensor | None,
+    ) -> Tensor:
+        """Blend the unexecuted previous chunk into a direct action prediction."""
+        if prev_chunk_left_over is None:
+            return actions
+        if self.rtc_processor is None:
+            raise RuntimeError("TIPS-Ground-VLA RTC is enabled but its processor is not initialized")
+
+        previous = prev_chunk_left_over
+        if previous.ndim == 2:
+            previous = previous.unsqueeze(0)
+        if previous.ndim != 3:
+            raise ValueError("prev_chunk_left_over must have shape [T, A] or [B, T, A]")
+        if previous.shape[0] == 1 and actions.shape[0] > 1:
+            previous = previous.expand(actions.shape[0], -1, -1)
+        if previous.shape[0] != actions.shape[0]:
+            raise ValueError("previous action batch size must match the observation batch size")
+        if previous.shape[2] != actions.shape[2]:
+            raise ValueError("previous action dimension must match action_dim")
+
+        delay = max(0, 0 if inference_delay is None else inference_delay)
+        prefix_steps = min(previous.shape[1], actions.shape[1])
+        if prefix_steps == 0:
+            return actions
+        weights = self.rtc_processor.get_prefix_weights(
+            delay,
+            self.config.rtc_config.execution_horizon,
+            actions.shape[1],
+        ).to(device=actions.device, dtype=actions.dtype)
+        result = actions.clone()
+        result[:, :prefix_steps] = torch.lerp(
+            actions[:, :prefix_steps],
+            previous[:, :prefix_steps].to(actions),
+            weights[:prefix_steps].view(1, prefix_steps, 1),
+        )
+        return result
 
     def reset(self) -> None:
         self._queue: deque[Tensor] = deque(maxlen=self.config.n_action_steps)
@@ -385,6 +448,10 @@ class TIPSGroundVLAPolicy(PreTrainedPolicy):
         state = batch[OBS_STATE]
         if not isinstance(state, Tensor):
             raise TypeError(f"{OBS_STATE!r} must be a tensor")
+        if len(language) != state.shape[0]:
+            raise ValueError(
+                f"instruction batch size ({len(language)}) must match state batch size ({state.shape[0]})"
+            )
         return images, state, language
 
     def _teacher_targets(self, images: Tensor, instructions: Sequence[str]) -> tuple[Tensor, Tensor]:
@@ -437,10 +504,26 @@ class TIPSGroundVLAPolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, object], **kwargs) -> Tensor:
-        return self.model(*self._inputs(batch))[0]
+        inference_delay = kwargs.get("inference_delay")
+        prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
+        if (inference_delay is not None or prev_chunk_left_over is not None) and not self._rtc_enabled():
+            raise RuntimeError("RTC arguments require --inference.type=rtc")
+        if inference_delay is not None and not isinstance(inference_delay, int):
+            raise TypeError("inference_delay must be an int or None")
+        if prev_chunk_left_over is not None and not isinstance(prev_chunk_left_over, Tensor):
+            raise TypeError("prev_chunk_left_over must be a torch.Tensor or None")
+        actions = self.model(*self._inputs(batch))[0]
+        if self._rtc_enabled():
+            actions = self._apply_rtc_prefix(
+                actions,
+                inference_delay=inference_delay,
+                prev_chunk_left_over=prev_chunk_left_over,
+            )
+        return actions
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, object], **kwargs) -> Tensor:
+        assert not self._rtc_enabled(), "RTC uses predict_action_chunk, not select_action"
         if not self._queue:
             self._queue.extend(
                 self.predict_action_chunk(batch)[:, : self.config.n_action_steps].transpose(0, 1)

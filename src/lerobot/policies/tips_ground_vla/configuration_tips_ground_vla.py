@@ -5,6 +5,7 @@ from typing import Literal
 
 from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
 from lerobot.optim import AdamWConfig
+from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 
 
@@ -20,6 +21,9 @@ class TIPSGroundVLAConfig(PreTrainedConfig):
     action_dim: int = 0
     chunk_size: int = 12
     n_action_steps: int = 4
+    # Injected by ``lerobot-rollout --inference.type=rtc`` after checkpoint
+    # loading. It is not needed during training or synchronous inference.
+    rtc_config: RTCConfig | None = None
     max_text_length: int = 64
     max_phrases: int = 4
     max_cameras: int = 8
