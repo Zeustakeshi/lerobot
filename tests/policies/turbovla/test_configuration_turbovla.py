@@ -77,6 +77,39 @@ def test_custom_config_accepts_differently_sized_cameras_by_enabling_resize() ->
     assert config.resize_images
 
 
+def test_custom_config_supports_larger_padded_model_dimensions() -> None:
+    config = TurboVLAConfig(device="cpu", max_state_dim=16, max_action_dim=16)
+    config.adapt_to_dataset_features(
+        {
+            "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 480, 640)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(6,)),
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(7,)),
+        }
+    )
+
+    config.validate_features()
+    assert (config.state_dim, config.action_dim) == (6, 7)
+    assert (config.model_state_dim, config.model_action_dim) == (16, 16)
+
+
+def test_custom_config_rejects_padded_dimensions_smaller_than_dataset() -> None:
+    config = TurboVLAConfig(device="cpu", max_state_dim=6, max_action_dim=6)
+
+    with pytest.raises(ValueError, match="max_state_dim"):
+        config.adapt_to_dataset_features(
+            {
+                "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256)),
+                OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(8,)),
+                ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(7,)),
+            }
+        )
+
+
+def test_fixed_variants_reject_padded_model_dimensions() -> None:
+    with pytest.raises(ValueError, match="only by the custom"):
+        TurboVLAConfig.libero(max_action_dim=16)
+
+
 def test_custom_variant_allows_camera_resize() -> None:
     config = TurboVLAConfig(
         variant="custom",

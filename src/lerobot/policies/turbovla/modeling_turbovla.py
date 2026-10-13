@@ -65,8 +65,8 @@ def _make_upstream_config(config: TurboVLAConfig):
             attention_backend="manual" if config.attention_implementation == "manual" else "sdpa",
         ),
         action=ActionHeadConfig(
-            action_dim=config.action_dim,
-            state_dim=config.state_dim,
+            action_dim=config.model_action_dim,
+            state_dim=config.model_state_dim,
             horizon=config.chunk_size,
             num_state_tokens=config.num_state_tokens,
             num_layers=config.num_action_decoder_layers,
@@ -199,7 +199,9 @@ class TurboVLAPolicy(PreTrainedPolicy):
         weights = weights[:prefix_steps].view(1, prefix_steps, 1)
         result = actions.clone()
         result[:, :prefix_steps] = torch.lerp(
-            actions[:, :prefix_steps], previous[:, :prefix_steps].to(device=actions.device, dtype=actions.dtype), weights
+            actions[:, :prefix_steps],
+            previous[:, :prefix_steps].to(device=actions.device, dtype=actions.dtype),
+            weights,
         )
         return result
 
@@ -225,6 +227,7 @@ class TurboVLAPolicy(PreTrainedPolicy):
         state = batch[OBS_STATE]
         if not isinstance(state, Tensor):
             raise TypeError(f"{OBS_STATE!r} must be a torch.Tensor")
+        state = self._pad_state(state)
         language = batch[OBS_LANGUAGE]
         if isinstance(language, str):
             instructions = [language]
@@ -236,34 +239,57 @@ class TurboVLAPolicy(PreTrainedPolicy):
             raise ValueError("language batch size must match image batch size")
         return instructions, pixel_values, state
 
-    def _predict(self, batch: dict[str, object]) -> Tensor:
+    def _pad_state(self, state: Tensor) -> Tensor:
+        if state.ndim not in (2, 3) or state.shape[-1] != self.config.state_dim:
+            raise ValueError(
+                f"{OBS_STATE!r} must have shape [B,{self.config.state_dim}] or [B,T,{self.config.state_dim}], "
+                f"got {tuple(state.shape)}"
+            )
+        padding = self.config.model_state_dim - self.config.state_dim
+        return F.pad(state, (0, padding)) if padding else state
+
+    def _pad_target_actions(self, target: Tensor) -> Tensor:
+        expected = (target.shape[0], self.config.chunk_size, self.config.action_dim)
+        if tuple(target.shape) != expected:
+            raise ValueError(f"target action shape {tuple(target.shape)} does not match expected {expected}")
+        padding = self.config.model_action_dim - self.config.action_dim
+        return F.pad(target, (0, padding)) if padding else target
+
+    def _predict_full(self, batch: dict[str, object]) -> Tensor:
         if self._vla_cpp_client is not None:
-            return self._vla_cpp_client.predict(batch)
+            actions = self._vla_cpp_client.predict(batch)
+            padding = self.config.model_action_dim - self.config.action_dim
+            return F.pad(actions, (0, padding)) if padding else actions
         instructions, pixel_values, state = self._prepare_inputs(batch)
         actions = self.model(instructions, {"dinov3": pixel_values}, state)
-        expected = (pixel_values.shape[0], self.config.chunk_size, self.config.action_dim)
+        expected = (pixel_values.shape[0], self.config.chunk_size, self.config.model_action_dim)
         if tuple(actions.shape) != expected:
             raise RuntimeError(f"TurboVLA returned shape {tuple(actions.shape)}, expected {expected}")
         return actions
 
+    def _predict(self, batch: dict[str, object]) -> Tensor:
+        actions = self._predict_full(batch)
+        return actions[..., : self.config.action_dim]
+
     def forward(self, batch: dict[str, object]) -> tuple[Tensor, dict[str, float]]:
-        actions_hat = self._predict(batch)
+        actions_hat = self._predict_full(batch)
         target = batch.get(ACTION)
         if not isinstance(target, Tensor):
             raise ValueError(f"training batch must contain tensor {ACTION!r}")
-        if target.shape != actions_hat.shape:
-            raise ValueError(
-                f"target action shape {tuple(target.shape)} does not match prediction {tuple(actions_hat.shape)}"
-            )
-        element_loss = F.l1_loss(actions_hat, target.to(actions_hat), reduction="none")
+        target = self._pad_target_actions(target).to(actions_hat)
+        element_loss = F.l1_loss(actions_hat, target, reduction="none")
         action_is_pad = batch.get("action_is_pad")
         if action_is_pad is None:
-            loss = element_loss.mean()
+            valid_steps = torch.ones(target.shape[:2], dtype=torch.bool, device=target.device)
         else:
             if not isinstance(action_is_pad, Tensor) or action_is_pad.shape != target.shape[:2]:
                 raise ValueError("action_is_pad must be a [B, chunk_size] tensor")
-            valid = (~action_is_pad.bool()).unsqueeze(-1)
-            loss = (element_loss * valid).sum() / (valid.sum() * element_loss.shape[-1]).clamp_min(1)
+            valid_steps = ~action_is_pad.bool()
+        valid_dimensions = (
+            torch.arange(self.config.model_action_dim, device=target.device) < self.config.action_dim
+        )
+        valid = valid_steps.unsqueeze(-1) & valid_dimensions.view(1, 1, -1)
+        loss = (element_loss * valid).sum() / valid.sum().clamp_min(1)
         return loss, {"l1_loss": loss.item()}
 
     @torch.no_grad()
@@ -297,7 +323,9 @@ class TurboVLAPolicy(PreTrainedPolicy):
     @torch.no_grad()
     def select_action(self, batch: dict[str, object], **kwargs: object) -> Tensor:
         del kwargs
-        assert not self._rtc_enabled(), "RTC is not supported for select_action, use it with predict_action_chunk"
+        assert not self._rtc_enabled(), (
+            "RTC is not supported for select_action, use it with predict_action_chunk"
+        )
         self.eval()
         if not self._action_queue:
             actions = self._predict(batch)[:, : self.config.n_action_steps]

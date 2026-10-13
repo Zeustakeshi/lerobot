@@ -66,6 +66,13 @@ class TurboVLAConfig(PreTrainedConfig):
     image_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
     state_dim: int = 8
     action_dim: int = 7
+    # The action head can be made embodiment-flexible by allocating its
+    # projections at a shared maximum width. Inputs and labels keep their
+    # dataset-native widths; the policy pads them and masks padded action
+    # coordinates from the loss. ``None`` preserves the native-width model
+    # used by released checkpoints.
+    max_state_dim: int | None = None
+    max_action_dim: int | None = None
     chunk_size: int = 12
     n_action_steps: int = 12
     # ``vla_cpp`` delegates inference and all checkpoint transforms to a
@@ -131,6 +138,17 @@ class TurboVLAConfig(PreTrainedConfig):
             raise ValueError(f"variant must be 'custom', 'libero', or 'robotwin', got {self.variant!r}")
         if self.chunk_size < 1 or self.n_action_steps < 1 or self.n_action_steps > self.chunk_size:
             raise ValueError("n_action_steps must be between 1 and chunk_size")
+        for name, value in (("max_state_dim", self.max_state_dim), ("max_action_dim", self.max_action_dim)):
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be positive when provided")
+        # Fresh configurations are still carrying the LIBERO defaults here and
+        # will be validated again after their schema is inferred from the data.
+        if not self.infer_from_dataset:
+            self._validate_max_dimensions()
+            if self.variant != "custom" and (
+                self.model_state_dim != self.state_dim or self.model_action_dim != self.action_dim
+            ):
+                raise ValueError("padded model dimensions are supported only by the custom TurboVLA variant")
         if self.inference_backend not in ("pytorch", "vla_cpp"):
             raise ValueError("inference_backend must be 'pytorch' or 'vla_cpp'")
         if self.vla_cpp_timeout_ms < 1:
@@ -256,6 +274,7 @@ class TurboVLAConfig(PreTrainedConfig):
         self.resize_images = True
         self.state_dim = state_shape[0]
         self.action_dim = action_shape[0]
+        self._validate_max_dimensions()
         self.input_features = {
             **image_features,
             OBS_STATE: state_features[OBS_STATE],
@@ -268,6 +287,7 @@ class TurboVLAConfig(PreTrainedConfig):
     def validate_features(self) -> None:
         if self.input_features is None or self.output_features is None:
             raise ValueError("TurboVLA requires explicit input_features and output_features")
+        self._validate_max_dimensions()
 
         image_features = tuple(
             key for key, feature in self.input_features.items() if feature.type is FeatureType.VISUAL
@@ -297,6 +317,22 @@ class TurboVLAConfig(PreTrainedConfig):
         action = self.output_features.get(ACTION)
         if action is None or action.type is not FeatureType.ACTION or action.shape != (self.action_dim,):
             raise ValueError(f"TurboVLA {self.variant} requires {ACTION!r} with shape ({self.action_dim},)")
+
+    def _validate_max_dimensions(self) -> None:
+        if self.max_state_dim is not None and self.max_state_dim < self.state_dim:
+            raise ValueError("max_state_dim must be greater than or equal to state_dim")
+        if self.max_action_dim is not None and self.max_action_dim < self.action_dim:
+            raise ValueError("max_action_dim must be greater than or equal to action_dim")
+
+    @property
+    def model_state_dim(self) -> int:
+        """State width used by the model projections after optional padding."""
+        return self.max_state_dim if self.max_state_dim is not None else self.state_dim
+
+    @property
+    def model_action_dim(self) -> int:
+        """Action width emitted by the model before trimming dataset padding."""
+        return self.max_action_dim if self.max_action_dim is not None else self.action_dim
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(lr=self.optimizer_lr, weight_decay=self.optimizer_weight_decay)
