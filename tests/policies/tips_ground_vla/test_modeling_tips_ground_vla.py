@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from torch import nn
@@ -7,7 +9,11 @@ from torch import nn
 from lerobot.configs import FeatureType, PolicyFeature
 from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.policies.tips_ground_vla.configuration_tips_ground_vla import TIPSGroundVLAConfig
-from lerobot.policies.tips_ground_vla.modeling_tips_ground_vla import TIPSGroundVLAPolicy
+from lerobot.policies.tips_ground_vla.modeling_tips_ground_vla import (
+    TeacherTargetGenerator,
+    TIPSGroundVLAPolicy,
+    _resolve_hub_cache_dir,
+)
 from lerobot.rollout.inference.rtc import supports_rtc_inference
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 
@@ -21,6 +27,35 @@ class _StubModel(nn.Module):
         self.calls += 1
         actions = torch.full((state.shape[0], 12, 6), float(self.calls), device=state.device)
         return actions, {}
+
+
+class _StubTIPSTeacher(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dtype_anchor = nn.Parameter(torch.zeros(1))
+
+    def encode_image(self, images: torch.Tensor) -> SimpleNamespace:
+        return SimpleNamespace(patch_tokens=torch.ones(images.shape[0], 256, 3, device=images.device))
+
+    def encode_text(self, phrases: list[str]) -> torch.Tensor:
+        return torch.ones(len(phrases), 3, device=self.dtype_anchor.device)
+
+
+class _StubDINOProcessor:
+    def __call__(self, images: torch.Tensor, return_tensors: str) -> dict[str, torch.Tensor]:
+        assert return_tensors == "pt"
+        return {"pixel_values": images}
+
+
+class _StubDINOTeacher(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dtype_anchor = nn.Parameter(torch.zeros(1))
+
+    def forward(self, pixel_values: torch.Tensor) -> SimpleNamespace:
+        return SimpleNamespace(
+            last_hidden_state=torch.ones(pixel_values.shape[0], 197, 3, device=pixel_values.device)
+        )
 
 
 def _config() -> TIPSGroundVLAConfig:
@@ -117,3 +152,28 @@ def test_policy_optimizer_preset_honors_policy_level_overrides() -> None:
     assert optimizer.lr == 5e-5
     assert optimizer.weight_decay == 0.01
     assert optimizer.grad_clip_norm == 1.0
+
+
+def test_teacher_repeats_each_instruction_for_every_camera() -> None:
+    teachers = object.__new__(TeacherTargetGenerator)
+    teachers.tips = _StubTIPSTeacher()
+    teachers.dino = _StubDINOTeacher()
+    teachers.dino_processor = _StubDINOProcessor()
+
+    tips_target, dino_target = teachers(torch.zeros(2, 2, 3, 32, 32), ["first task", "second task"])
+
+    assert tips_target.shape == (2, 2, 1, 196)
+    assert dino_target.shape == (2, 2, 196, 196)
+
+
+def test_unusable_checkpoint_cache_path_falls_back_to_user_cache(tmp_path) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("block cache directory creation")
+    config = _config()
+    config.hub_cache_dir = str(blocker / "hf-cache")
+
+    assert _resolve_hub_cache_dir(config) is None
+
+    config.local_files_only = True
+    with pytest.raises(OSError, match="local_files_only=True"):
+        _resolve_hub_cache_dir(config)
