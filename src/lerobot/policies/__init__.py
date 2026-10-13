@@ -31,6 +31,7 @@ from .pi05.configuration_pi05 import PI05Config as PI05Config
 from .pretrained import PreTrainedPolicy as PreTrainedPolicy
 from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
+from .tips_ground_vla.configuration_tips_ground_vla import TIPSGroundVLAConfig as TIPSGroundVLAConfig
 from .turbovla.configuration_turbovla import TurboVLAConfig as TurboVLAConfig
 from .utils import make_robot_action, prepare_observation_for_inference
 from .vla_jepa.configuration_vla_jepa import VLAJEPAConfig as VLAJEPAConfig
@@ -60,6 +61,7 @@ __all__ = [
     "SmolVLAConfig",
     "TDMPCConfig",
     "TurboVLAConfig",
+    "TIPSGroundVLAConfig",
     "VLAJEPAConfig",
     "VQBeTConfig",
     "WallXConfig",
