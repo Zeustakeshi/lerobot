@@ -132,7 +132,11 @@ def _download(config: TIPSGroundVLAConfig) -> None:
         if Path(source).exists():
             continue
         try:
-            snapshot_download(source, local_files_only=config.local_files_only)
+            snapshot_download(
+                source,
+                cache_dir=config.hub_cache_dir,
+                local_files_only=config.local_files_only,
+            )
         except RuntimeError as error:
             # Some hf-xet builds leave an invalid resumable hash in the local
             # cache. Retry through the regular HTTP backend transparently so a
@@ -141,7 +145,7 @@ def _download(config: TIPSGroundVLAConfig) -> None:
                 raise
             tqdm.write("  ! Xet resume metadata is invalid; retrying with the HTTP downloader")
             hub_constants.HF_HUB_DISABLE_XET = True
-            snapshot_download(source, local_files_only=False)
+            snapshot_download(source, cache_dir=config.hub_cache_dir, local_files_only=False)
         tqdm.write(f"  ✓ {label}: {source}")
 
 
@@ -200,9 +204,11 @@ def _tips_pass(dataset: Dataset, config: TIPSGroundVLAConfig, arrays: dict[str, 
     from transformers import AutoModel, AutoTokenizer
 
     device = torch.device(config.device)
+    print("  Loading frozen TIPSv2-B/14 onto GPU …", flush=True)
     model = (
         AutoModel.from_pretrained(
             config.tips_teacher_path or config.tips_teacher_id,
+            cache_dir=config.hub_cache_dir,
             trust_remote_code=True,
             local_files_only=config.local_files_only,
             dtype=torch.float16 if device.type == "cuda" else torch.float32,
@@ -211,8 +217,12 @@ def _tips_pass(dataset: Dataset, config: TIPSGroundVLAConfig, arrays: dict[str, 
         .eval()
     )
     tokenizer = AutoTokenizer.from_pretrained(
-        config.text_encoder_id, local_files_only=config.local_files_only, use_fast=True
+        config.text_encoder_id,
+        cache_dir=config.hub_cache_dir,
+        local_files_only=config.local_files_only,
+        use_fast=True,
     )
+    print(f"  TIPSv2 ready · generating {len(dataset):,} frames", flush=True)
     with torch.inference_mode():
         for index in tqdm(range(len(dataset)), desc="TIPS semantic maps", unit="frame", colour="magenta"):
             sample = dataset[index]
@@ -246,8 +256,18 @@ def _dino_pass(dataset: Dataset, config: TIPSGroundVLAConfig, arrays: dict[str, 
 
     device = torch.device(config.device)
     source = config.dino_teacher_path or config.dino_teacher_id
-    processor = AutoImageProcessor.from_pretrained(source, local_files_only=config.local_files_only)
-    model = AutoModel.from_pretrained(source, local_files_only=config.local_files_only).to(device).eval()
+    print("  Loading frozen DINOv3 ViT-L/16 onto GPU …", flush=True)
+    processor = AutoImageProcessor.from_pretrained(
+        source, cache_dir=config.hub_cache_dir, local_files_only=config.local_files_only
+    )
+    model = (
+        AutoModel.from_pretrained(
+            source, cache_dir=config.hub_cache_dir, local_files_only=config.local_files_only
+        )
+        .to(device)
+        .eval()
+    )
+    print(f"  DINOv3 ready · generating {len(dataset):,} frames", flush=True)
     with torch.inference_mode():
         for index in tqdm(range(len(dataset)), desc="DINO spatial relations", unit="frame", colour="blue"):
             images = _images(dataset[index], config.image_keys)
@@ -278,16 +298,22 @@ def _grounding_pass(dataset: Dataset, config: TIPSGroundVLAConfig, arrays: dict[
     from transformers import AutoProcessor, GroundingDinoForObjectDetection
 
     device = torch.device(config.device)
+    print("  Loading frozen Grounding DINO onto GPU …", flush=True)
     processor = AutoProcessor.from_pretrained(
-        config.grounding_dino_id, local_files_only=config.local_files_only
+        config.grounding_dino_id,
+        cache_dir=config.hub_cache_dir,
+        local_files_only=config.local_files_only,
     )
     model = (
         GroundingDinoForObjectDetection.from_pretrained(
-            config.grounding_dino_id, local_files_only=config.local_files_only
+            config.grounding_dino_id,
+            cache_dir=config.hub_cache_dir,
+            local_files_only=config.local_files_only,
         )
         .to(device)
         .eval()
     )
+    print(f"  Grounding DINO ready · generating {len(dataset):,} frames", flush=True)
     with torch.inference_mode():
         for index in tqdm(
             range(len(dataset)), desc="Grounding DINO candidates", unit="frame", colour="green"
