@@ -1,179 +1,172 @@
-from __future__ import annotations
-
 from types import SimpleNamespace
 
 import pytest
 import torch
 from torch import nn
 
-from lerobot.configs import FeatureType, PolicyFeature
-from lerobot.policies.rtc.configuration_rtc import RTCConfig
+from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.tips_ground_vla.configuration_tips_ground_vla import TIPSGroundVLAConfig
 from lerobot.policies.tips_ground_vla.modeling_tips_ground_vla import (
-    TeacherTargetGenerator,
+    TIPSGroundVLA,
     TIPSGroundVLAPolicy,
     _resolve_hub_cache_dir,
+    action_losses,
 )
-from lerobot.rollout.inference.rtc import supports_rtc_inference
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE, OBS_STATE
 
 
-class _StubModel(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls = 0
+class StubBatch(dict):
+    def __getattr__(self, key):
+        return self[key]
 
-    def forward(self, images, state, instructions):
-        self.calls += 1
-        actions = torch.full((state.shape[0], 12, 6), float(self.calls), device=state.device)
-        return actions, {}
+    def to(self, device):
+        return StubBatch({key: value.to(device) for key, value in self.items()})
 
 
-class _StubTIPSTeacher(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.dtype_anchor = nn.Parameter(torch.zeros(1))
-
-    def encode_image(self, images: torch.Tensor) -> SimpleNamespace:
-        return SimpleNamespace(patch_tokens=torch.ones(images.shape[0], 256, 3, device=images.device))
-
-    def encode_text(self, phrases: list[str]) -> torch.Tensor:
-        return torch.ones(len(phrases), 3, device=self.dtype_anchor.device)
-
-
-class _StubDINOProcessor:
-    def __call__(self, images: torch.Tensor, return_tensors: str) -> dict[str, torch.Tensor]:
-        assert return_tensors == "pt"
-        return {"pixel_values": images}
-
-
-class _StubDINOTeacher(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.dtype_anchor = nn.Parameter(torch.zeros(1))
-
-    def forward(self, pixel_values: torch.Tensor) -> SimpleNamespace:
-        return SimpleNamespace(
-            last_hidden_state=torch.ones(pixel_values.shape[0], 197, 3, device=pixel_values.device)
+class StubTokenizer:
+    def __call__(self, texts, **kwargs):
+        length = kwargs["max_length"]
+        return StubBatch(
+            input_ids=torch.ones(len(texts), length, dtype=torch.long),
+            attention_mask=torch.ones(len(texts), length, dtype=torch.long),
         )
 
 
-def _config() -> TIPSGroundVLAConfig:
-    image = PolicyFeature(FeatureType.VISUAL, (3, 720, 1280))
-    state = PolicyFeature(FeatureType.STATE, (6,))
-    action = PolicyFeature(FeatureType.ACTION, (6,))
-    return TIPSGroundVLAConfig(
-        infer_from_dataset=False,
-        image_keys=("observation.images.top", "observation.images.wrist"),
-        state_dim=6,
-        action_dim=6,
-        input_features={
-            "observation.images.top": image,
-            "observation.images.wrist": image,
-            OBS_STATE: state,
-            OBS_LANGUAGE: PolicyFeature(FeatureType.LANGUAGE, (1,)),
-        },
-        output_features={ACTION: action},
-        n_action_steps=4,
-        device="cpu",
-    )
+class StubText(nn.Module):
+    def forward(self, input_ids, attention_mask):
+        del attention_mask
+        return SimpleNamespace(last_hidden_state=torch.ones(*input_ids.shape, 384, device=input_ids.device))
 
 
-def _batch(task: str = "put the red block in the pen holder") -> dict[str, object]:
-    return {
-        "observation.images.top": torch.zeros(1, 3, 32, 32),
-        "observation.images.wrist": torch.zeros(1, 3, 32, 32),
-        OBS_STATE: torch.zeros(1, 6),
-        "task": task,
+class StubVision(nn.Module):
+    blocks = ()
+
+    def forward_features(self, images):
+        return torch.ones(images.shape[0], 295, 384, device=images.device)
+
+
+def config(cameras: int = 2) -> TIPSGroundVLAConfig:
+    images = {
+        f"observation.images.cam{i}": PolicyFeature(FeatureType.VISUAL, (3, 480, 640)) for i in range(cameras)
     }
+    state = PolicyFeature(FeatureType.STATE, (6,))
+    action = PolicyFeature(FeatureType.ACTION, (7,))
+    cfg = TIPSGroundVLAConfig(
+        input_features={**images, OBS_STATE: state, OBS_LANGUAGE: PolicyFeature(FeatureType.LANGUAGE, (1,))},
+        output_features={ACTION: action},
+        infer_from_dataset=False,
+        image_keys=tuple(images),
+        state_dim=6,
+        action_dim=7,
+    )
+    return cfg
 
 
-def test_select_action_reuses_only_configured_chunk_prefix() -> None:
-    model = _StubModel()
-    policy = TIPSGroundVLAPolicy(_config(), model=model)
-
-    actions = [policy.select_action(_batch()) for _ in range(5)]
-
-    assert model.calls == 2
-    assert [action.item() for action in (a[0, 0] for a in actions)] == [1, 1, 1, 1, 2]
+def model(cameras: int = 2) -> TIPSGroundVLA:
+    return TIPSGroundVLA(config(cameras), vision=StubVision(), text=StubText(), tokenizer=StubTokenizer())
 
 
-def test_drop_queued_actions_refreshes_chunk_for_new_rollout_task() -> None:
-    model = _StubModel()
-    policy = TIPSGroundVLAPolicy(_config(), model=model)
-    assert policy.select_action(_batch("old task"))[0, 0].item() == 1
-
-    policy.drop_queued_actions()
-
-    assert policy.select_action(_batch("new task"))[0, 0].item() == 2
-    assert model.calls == 2
-
-
-def test_instruction_batch_must_match_observation_batch() -> None:
-    policy = TIPSGroundVLAPolicy(_config(), model=_StubModel())
-    batch = _batch()
-    batch[OBS_LANGUAGE] = ["first", "second"]
-
-    with pytest.raises(ValueError, match=r"instruction batch size \(2\)"):
-        policy.predict_action_chunk(batch)
+def test_v3_config_is_locked() -> None:
+    cfg = config()
+    assert cfg.image_size == (224, 336)
+    assert cfg.chunk_size == 32
+    assert cfg.n_action_steps == 4
+    assert cfg.max_phrases == 6
+    with pytest.raises(ValueError):
+        TIPSGroundVLAConfig(chunk_size=12)
 
 
-def test_rtc_blends_previous_prefix_and_is_detected_by_rollout() -> None:
-    config = _config()
-    policy = TIPSGroundVLAPolicy(config, model=_StubModel())
-    config.rtc_config = RTCConfig(execution_horizon=4)
-    policy.init_rtc_processor()
-    previous = torch.full((2, 6), 0.75)
-
-    actions = policy.predict_action_chunk(_batch(), inference_delay=2, prev_chunk_left_over=previous)
-
-    assert supports_rtc_inference(policy)
-    torch.testing.assert_close(actions[:, :2], previous[None, :2])
-    # A short prefix is not padded; the newly predicted suffix stays intact.
-    torch.testing.assert_close(actions[:, 2:], torch.ones_like(actions[:, 2:]))
-    with pytest.raises(AssertionError, match="RTC uses predict_action_chunk"):
-        policy.select_action(_batch())
-
-
-def test_rtc_arguments_require_rollout_configuration() -> None:
-    policy = TIPSGroundVLAPolicy(_config(), model=_StubModel())
-    with pytest.raises(RuntimeError, match="require --inference.type=rtc"):
-        policy.predict_action_chunk(_batch(), inference_delay=1, prev_chunk_left_over=torch.zeros(1, 6))
-
-
-def test_policy_optimizer_preset_honors_policy_level_overrides() -> None:
-    config = _config()
-    config.optimizer_lr = 5e-5
-    config.optimizer_weight_decay = 0.01
-    config.optimizer_grad_clip_norm = 1.0
-
-    optimizer = config.get_optimizer_preset()
-
-    assert optimizer.lr == 5e-5
-    assert optimizer.weight_decay == 0.01
-    assert optimizer.grad_clip_norm == 1.0
+def test_v3_forward_contract_and_camera_mask() -> None:
+    net = model()
+    spans = torch.zeros(1, 6, 64, dtype=torch.bool)
+    spans[0, 0, 1:3] = True
+    actions, out = net(
+        torch.zeros(1, 2, 3, 224, 336),
+        torch.zeros(1, 6),
+        ["put the object in the tray"],
+        camera_valid=torch.tensor([[True, False]]),
+        phrase_spans=spans,
+        debug=True,
+    )
+    assert actions.shape == (1, 32, 7)
+    assert out["F"].shape == (1, 588, 384)
+    assert out["T"].shape == (1, 64, 384)
+    assert out["S"].shape == (1, 6, 588)
+    assert out["Za"].shape == (1, 8, 384)
+    assert out["Zg"].shape == (1, 8, 384)
+    assert out["Zs"].shape == (1, 4, 384)
+    assert out["region_maps"].shape == (1, 8, 2, 14, 21)
+    assert out["geometry"].shape == (1, 8, 2, 6)
+    assert out["fusion_context"].shape == (1, 24, 384)
+    assert out["Z"].shape == (1, 20, 384)
+    assert out["memory"].shape == (1, 4, 384)
+    assert out["alignment_attention"].shape == (1, 6, 8, 588)
+    assert out["slot_attention"].shape == (1, 6, 8, 588)
+    assert out["region_maps"][:, :, 1].count_nonzero() == 0
 
 
-def test_teacher_repeats_each_instruction_for_every_camera() -> None:
-    teachers = object.__new__(TeacherTargetGenerator)
-    teachers.tips = _StubTIPSTeacher()
-    teachers.dino = _StubDINOTeacher()
-    teachers.dino_processor = _StubDINOProcessor()
-
-    tips_target, dino_target = teachers(torch.zeros(2, 2, 3, 32, 32), ["first task", "second task"])
-
-    assert tips_target.shape == (2, 2, 1, 196)
-    assert dino_target.shape == (2, 2, 196, 196)
+def test_action_gradient_reaches_region_predictor() -> None:
+    net = model(1)
+    actions, _ = net(torch.zeros(1, 1, 3, 224, 336), torch.zeros(1, 6), ["pick object"])
+    actions.square().mean().backward()
+    assert net.region_slot.weight.grad is not None
+    assert net.region_slot.weight.grad.abs().sum() > 0
 
 
-def test_unusable_checkpoint_cache_path_falls_back_to_user_cache(tmp_path) -> None:
-    blocker = tmp_path / "not-a-directory"
-    blocker.write_text("block cache directory creation")
-    config = _config()
-    config.hub_cache_dir = str(blocker / "hf-cache")
+def test_memory_is_causal_fifo_and_reset_by_policy() -> None:
+    net = model(1)
+    images, state, text = torch.zeros(1, 1, 3, 224, 336), torch.zeros(1, 6), ["move"]
+    _, first = net(images, state, text)
+    _, second = net(images, state, text, memory=first["memory"], memory_valid=first["memory_valid"])
+    assert first["memory_valid"].tolist() == [[False, False, False, True]]
+    assert second["memory_valid"].tolist() == [[False, False, True, True]]
 
-    assert _resolve_hub_cache_dir(config) is None
 
-    config.local_files_only = True
-    with pytest.raises(OSError, match="local_files_only=True"):
-        _resolve_hub_cache_dir(config)
+def test_masked_smooth_l1_and_delta() -> None:
+    pred = torch.zeros(1, 32, 2, requires_grad=True)
+    target = torch.ones_like(pred)
+    valid = torch.zeros(1, 32, dtype=torch.bool)
+    valid[:, :4] = True
+    action, delta = action_losses(pred, target, valid)
+    (action + delta).backward()
+    assert action > 0
+    assert delta == 0
+    assert pred.grad[:, 4:].count_nonzero() == 0
+
+
+def test_plain_lerobot_batch_trains_without_teacher_targets() -> None:
+    cfg = config(1)
+    policy = TIPSGroundVLAPolicy(cfg, model=model(1))
+    batch = {
+        cfg.image_keys[0]: torch.zeros(1, 3, 64, 64),
+        OBS_STATE: torch.zeros(1, 6),
+        OBS_LANGUAGE: ["pick object"],
+        ACTION: torch.zeros(1, 32, 7),
+    }
+    loss, metrics = policy(batch)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert set(metrics) == {"action_loss", "delta_loss", "loss"}
+
+
+def test_four_observation_sequence_training_is_causal() -> None:
+    cfg = config(1)
+    policy = TIPSGroundVLAPolicy(cfg, model=model(1))
+    batch = {
+        cfg.image_keys[0]: torch.zeros(1, 4, 3, 64, 64),
+        OBS_STATE: torch.zeros(1, 4, 6),
+        OBS_LANGUAGE: ["pick object"],
+        ACTION: torch.zeros(1, 32, 7),
+    }
+    loss, _ = policy(batch)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert cfg.observation_delta_indices == [-3, -2, -1, 0]
+
+
+def test_unusable_checkpoint_cache_path_falls_back(tmp_path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    cfg = config(1)
+    cfg.hub_cache_dir = str(blocker / "cache")
+    assert _resolve_hub_cache_dir(cfg) is None

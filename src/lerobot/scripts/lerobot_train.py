@@ -476,6 +476,18 @@ def train(cfg: TrainPipelineConfig):
             defer_weight_load=defer_weight_load,
         )
 
+    # TIPS-Ground-VLA v3 owns a mandatory offline teacher-preparation stage.
+    # It is deliberately orchestrated by the train command (rather than the
+    # deployable policy) so teachers never become part of model state/runtime.
+    if not cfg.is_reward_model_training and getattr(policy, "name", None) == "tips_ground_vla":
+        from lerobot.policies.tips_ground_vla.teacher_pipeline import prepare_teacher_cache
+
+        if is_main_process():
+            dataset = prepare_teacher_cache(dataset, policy.config)
+        accelerator.wait_for_everyone()
+        if not is_main_process():
+            dataset = prepare_teacher_cache(dataset, policy.config)
+
     peft_model = None
     if cfg.peft is not None:
         if cfg.is_reward_model_training:
@@ -720,13 +732,20 @@ def train(cfg: TrainPipelineConfig):
     )
 
     if is_main_process():
+        progress_description = "Training"
+        if policy.config.type == "tips_ground_vla":
+            phase = getattr(policy.config, "training_phase", "joint")
+            phase_label = "Perception pretrain" if phase == "perception" else "Joint policy train"
+            progress_description = f"TIPS-Ground-VLA · Stage 5/5 · {phase_label}"
         progbar = tqdm(
             total=cfg.steps - step,
-            desc="Training",
+            desc=progress_description,
             unit="step",
             disable=inside_slurm(),
             position=0,
             leave=True,
+            colour="cyan",
+            bar_format="{desc:<54} {percentage:6.2f}%|{bar:28}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         )
         logging.info(
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
