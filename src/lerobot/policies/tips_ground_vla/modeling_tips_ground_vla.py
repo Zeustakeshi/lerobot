@@ -529,6 +529,15 @@ class TIPSGroundVLA(nn.Module):
         b, c = images.shape[:2]
         if images.shape[2:] != (3, 224, 336) or c > 2:
             raise ValueError("images must be [B,C<=2,3,224,336]")
+        # LeRobot may retain the singleton observation axis for state even
+        # when the camera tensors have already been reduced to the current
+        # frame. The state encoder consumes one vector per batch item.
+        if state.ndim == 3 and state.shape[1] == 1:
+            state = state[:, 0]
+            if state_valid is not None and state_valid.ndim == 3 and state_valid.shape[1] == 1:
+                state_valid = state_valid[:, 0]
+        if state.ndim != 2:
+            raise ValueError(f"state must be [B,state_dim] for a single observation, got {tuple(state.shape)}")
         if c == 1:
             images = torch.cat((images, torch.zeros_like(images)), 1)
             if camera_valid is None:
