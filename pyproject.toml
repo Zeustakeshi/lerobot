@@ -247,6 +247,7 @@ hilserl = ["lerobot[transformers-dep]", "lerobot[dataset]", "gym-hil>=0.1.14,<0.
 vla_jepa = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[qwen-vl-utils-dep]"]
 lingbot_va = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[accelerate-dep]"]
 turbovla = ["lerobot[transformers-dep]", "lerobot[timm-dep]"]
+turbovla-v2 = ["lerobot[transformers-dep]", "sentencepiece>=0.2.0,<0.3.0"]
 # PyPI normalizes '-' and '_' in extra names, so both
 # ``lerobot[tips_ground_vla]`` and ``lerobot[tips-ground-vla]`` work.
 tips_ground_vla = [
@@ -341,6 +342,7 @@ all = [
     "lerobot[vla_jepa]",
     "lerobot[lingbot_va]",
     "lerobot[turbovla]",
+    "lerobot[turbovla-v2]",
     "lerobot[tips_ground_vla]",
     "lerobot[async]",
     "lerobot[dev]",

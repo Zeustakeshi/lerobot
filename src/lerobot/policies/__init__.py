@@ -33,6 +33,7 @@ from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .tips_ground_vla.configuration_tips_ground_vla import TIPSGroundVLAConfig as TIPSGroundVLAConfig
 from .turbovla.configuration_turbovla import TurboVLAConfig as TurboVLAConfig
+from .turbovla_v2.configuration_turbovla_v2 import TurboVLAV2Config as TurboVLAV2Config
 from .utils import make_robot_action, prepare_observation_for_inference
 from .vla_jepa.configuration_vla_jepa import VLAJEPAConfig as VLAJEPAConfig
 from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
@@ -61,6 +62,7 @@ __all__ = [
     "SmolVLAConfig",
     "TDMPCConfig",
     "TurboVLAConfig",
+    "TurboVLAV2Config",
     "TIPSGroundVLAConfig",
     "VLAJEPAConfig",
     "VQBeTConfig",
