@@ -179,6 +179,12 @@ _COMPLEMENTARY_KEYS = (
     # processor step can read the kind and rewrite QUERY_TEXT.
     QUERY_KIND,
     QUERY_TEXT,
+    # Training-only TIPS-Ground-VLA teacher sidecars must survive the policy
+    # processor round-trip in complementary_data so auxiliary losses can read
+    # them; they are absent during student-only inference.
+    "tips_teacher_semantic",
+    "tips_teacher_text",
+    "dino_teacher_local_relations",
 )
 
 
