@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -35,8 +36,19 @@ def _images(sample: dict[str, Any], keys: tuple[str, ...]) -> torch.Tensor:
 
 def _root(config: TIPSGroundVLAConfig, dataset: Dataset) -> Path:
     if config.teacher_cache_dir:
-        return Path(config.teacher_cache_dir).expanduser().resolve()
-    return Path(dataset.root) / "teacher_targets" / "tips_ground_vla_v4"
+        root = Path(config.teacher_cache_dir).expanduser().resolve()
+    else:
+        root = Path(dataset.root) / "teacher_targets" / "tips_ground_vla_v4"
+
+    # Train and evaluation datasets are episode-filtered views of the same
+    # LeRobot root. Their local row indices both start at zero, so they must
+    # never share a frame-indexed teacher cache.
+    episodes = getattr(dataset, "episodes", None)
+    if episodes is not None:
+        episode_ids = ",".join(str(int(episode)) for episode in sorted(episodes))
+        split_id = hashlib.sha1(episode_ids.encode()).hexdigest()[:12]
+        root = root / f"episodes_{split_id}"
+    return root
 
 
 def _manifest(config: TIPSGroundVLAConfig, frames: int) -> dict[str, Any]:

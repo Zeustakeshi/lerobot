@@ -481,15 +481,19 @@ def train(cfg: TrainPipelineConfig):
     if (
         not cfg.is_reward_model_training
         and getattr(policy, "name", None) == "tips_ground_vla"
-        and (policy.config.lambda_tips or policy.config.lambda_dino)
+        and (policy.config.lambda_tips or policy.config.lambda_tips_text or policy.config.lambda_dino)
     ):
         from lerobot.policies.tips_ground_vla.teacher_pipeline import prepare_teacher_cache
 
         if is_main_process():
             dataset = prepare_teacher_cache(dataset, policy.config)
+            if eval_dataset is not None:
+                eval_dataset = prepare_teacher_cache(eval_dataset, policy.config)
         accelerator.wait_for_everyone()
         if not is_main_process():
             dataset = prepare_teacher_cache(dataset, policy.config)
+            if eval_dataset is not None:
+                eval_dataset = prepare_teacher_cache(eval_dataset, policy.config)
 
     peft_model = None
     if cfg.peft is not None:
