@@ -188,7 +188,14 @@ class TeacherCacheDataset(Dataset):
         return len(self.dataset)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self.dataset, name)
+        # ``__getattr__`` may run while pickle is restoring this wrapper in a
+        # spawned DataLoader worker, before ``dataset`` has been assigned.
+        # Accessing ``self.dataset`` in that state recursively calls this
+        # method until Python raises RecursionError.
+        dataset = self.__dict__.get("dataset")
+        if dataset is None:
+            raise AttributeError(name)
+        return getattr(dataset, name)
 
     def _open(self, name: str):
         if name not in self._arrays:
