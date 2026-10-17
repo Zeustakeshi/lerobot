@@ -36,7 +36,7 @@ class TIPSGroundVLACosineConfig(LRSchedulerConfig):
 @PreTrainedConfig.register_subclass("tips_ground_vla")
 @dataclass
 class TIPSGroundVLAConfig(PreTrainedConfig):
-    """Independent ViT-S/16 VLA distilled from TIPSv2 and DINOv3 during training."""
+    """Lightweight Action-only ViT-S/16 VLA with grounding and robot-state heads."""
 
     infer_from_dataset: bool = True
     image_keys: tuple[str, ...] = ()
@@ -45,41 +45,68 @@ class TIPSGroundVLAConfig(PreTrainedConfig):
     action_dim: int = 0
     chunk_size: int = 32
     n_action_steps: int = 4
+    memory_stride: int = 1
+    # The representative multi-episode investigation found this memory path
+    # slower and less accurate than the current-observation action-only path.
+    use_temporal_memory: bool = False
+    action_residual_from_state: bool = False
+    # Predict causal action increments, accumulated from the observed state.
+    # This prevents the absolute-action decoder from collapsing to a flat
+    # conditional mean across heterogeneous demonstrations.
+    action_delta_from_state: bool = True
+    # ``direct`` preserves the validated checkpoint graph.  The two flow heads
+    # are opt-in so loading an existing direct checkpoint remains strict and
+    # byte-for-byte compatible.
+    action_head: Literal["direct", "flow", "architecture_aware_flow"] = "direct"
+    flow_num_steps: int = 4
+    flow_num_layers: int = 4
+    flow_time_alpha: float = 1.5
+    flow_time_beta: float = 1.0
+    flow_sigma_min: float = 0.0
+    # Train-split increment standard deviations are 0.029--0.096 in the
+    # normalized six-dimensional action space.  Scaling them near unit variance
+    # prevents the flow prior from becoming an accumulated unit-noise random walk.
+    flow_delta_scale: float = 0.075
+    flow_reconstruction_weight: float = 0.1
+    flow_motion_weight: float = 0.05
     # Injected by ``lerobot-rollout --inference.type=rtc`` after checkpoint
     # loading. It is not needed during training or synchronous inference.
     rtc_config: RTCConfig | None = None
     max_text_length: int = 64
-    max_phrases: int = 6
     max_cameras: int = 2
     hidden_dim: int = 384
     patch_grid: tuple[int, int] = (14, 21)
     vision_encoder_id: str = "vit_small_patch16_224.augreg_in21k_ft_in1k"
     text_encoder_id: str = "microsoft/MiniLM-L12-H384-uncased"
-    tips_teacher_id: str = "google/tipsv2-b14"
-    dino_teacher_id: str = "facebook/dinov3-vitl16-pretrain-lvd1689m"
-    tips_teacher_path: str | None = None
-    dino_teacher_path: str | None = None
-    cache_teacher_targets: bool = False
-    teacher_cache_dir: str | None = None
-    teacher_cache_shard_size: int = 64
-    teacher_prepare: Literal["auto", "require", "off"] = "auto"
-    teacher_audit_frames: int = 100
-    teacher_require_validated_regions: bool = True
-    grounding_dino_id: str = "IDEA-Research/grounding-dino-base"
-    grounding_dino_box_threshold: float = 0.35
-    grounding_dino_text_threshold: float = 0.25
     # ``None`` uses Hugging Face's default cache. With ``local_files_only=False``
     # (the default), all pretrained components are fetched automatically on first use.
     hub_cache_dir: str | None = None
     local_files_only: bool = False
     freeze_vision_blocks: int = 8
-    training_phase: Literal["perception", "joint"] = "joint"
     lambda_action: float = 1.0
-    lambda_delta: float = 0.10
-    lambda_semantic: float = 0.20
-    lambda_spatial: float = 0.05
-    lambda_region: float = 0.50
-    lambda_query_region: float = 0.05
+    lambda_action_delta: float = 0.5
+    # Training-only representation teachers.  Zero keeps the deployable,
+    # action-only path byte-for-byte independent from teacher artifacts.
+    lambda_tips: float = 0.0
+    tips_semantic_target: Literal["projection", "alignment_attention"] = "projection"
+    # Optional student-only semantic pooling into the action-consumed Alignment tokens.
+    # Zero preserves checkpoint-compatible legacy inference.
+    tips_semantic_action_scale: float = 0.0
+    lambda_tips_text: float = 0.0
+    tips_text_relational_weight: float = 1.0
+    tips_text_shuffle_targets: bool = False
+    lambda_dino: float = 0.0
+    tips_teacher_id: str = "google/tipsv2-b14"
+    dino_teacher_id: str = "facebook/dinov3-vitl16-pretrain-lvd1689m"
+    tips_teacher_path: str | None = None
+    dino_teacher_path: str | None = None
+    teacher_cache_dir: str | None = None
+    teacher_prepare: Literal["auto", "require", "off"] = "off"
+    tips_temperature: float = 0.005065968260169029
+    student_semantic_temperature: float = 0.05
+    first_four_loss_weight: float = 1.0
+    grounding_conditioning: Literal["additive", "identity_preserving"] = "identity_preserving"
+    grounding_context_scale: float = 0.25
     optimizer_lr: float = 1e-4
     optimizer_weight_decay: float = 0.05
     optimizer_grad_clip_norm: float = 1.0
@@ -103,18 +130,40 @@ class TIPSGroundVLAConfig(PreTrainedConfig):
             raise ValueError("TIPS-Ground-VLA v3 requires 224x336 images and a 14x21 patch grid")
         if self.hidden_dim != 384 or self.max_cameras != 2:
             raise ValueError("TIPS-Ground-VLA v3 requires d=384 and exactly two camera slots")
-        if self.max_phrases != 6 or self.max_text_length != 64:
-            raise ValueError("TIPS-Ground-VLA v3 requires max_phrases=6 and max_text_length=64")
+        if self.max_text_length != 64:
+            raise ValueError("TIPS-Ground-VLA v3 requires max_text_length=64")
         if self.n_action_steps != 4:
             raise ValueError("TIPS-Ground-VLA v3 has a fixed execution horizon of 4")
-        if self.training_phase == "perception":
-            self.lambda_action, self.lambda_delta = 0.0, 0.0
-            self.lambda_semantic, self.lambda_spatial = 0.30, 0.10
-            self.lambda_region, self.lambda_query_region = 1.0, 0.10
-        if self.teacher_audit_frames != 100:
-            raise ValueError("TIPS-Ground-VLA v3 requires a 100-frame teacher audit set")
-        if self.teacher_cache_shard_size < 1:
-            raise ValueError("teacher_cache_shard_size must be positive")
+        if self.memory_stride < 1:
+            raise ValueError("memory_stride must be positive")
+        if self.action_residual_from_state and self.action_delta_from_state:
+            raise ValueError("choose at most one state-relative action parameterization")
+        if self.action_head not in {"direct", "flow", "architecture_aware_flow"}:
+            raise ValueError(f"unsupported action_head={self.action_head!r}")
+        if self.flow_num_steps < 1 or self.flow_num_layers < 1:
+            raise ValueError("flow_num_steps and flow_num_layers must be positive")
+        if self.flow_time_alpha <= 0 or self.flow_time_beta <= 0:
+            raise ValueError("flow timestep beta parameters must be positive")
+        if not 0 <= self.flow_sigma_min < 1:
+            raise ValueError("flow_sigma_min must be in [0, 1)")
+        if self.flow_delta_scale <= 0:
+            raise ValueError("flow_delta_scale must be positive")
+        if self.flow_reconstruction_weight < 0 or self.flow_motion_weight < 0:
+            raise ValueError("flow auxiliary weights must be non-negative")
+        if self.lambda_action_delta < 0:
+            raise ValueError("lambda_action_delta must be non-negative")
+        if self.lambda_tips < 0 or self.lambda_tips_text < 0 or self.lambda_dino < 0:
+            raise ValueError("teacher loss weights must be non-negative")
+        if self.tips_semantic_action_scale < 0:
+            raise ValueError("tips_semantic_action_scale must be non-negative")
+        if self.tips_text_relational_weight < 0:
+            raise ValueError("tips_text_relational_weight must be non-negative")
+        if self.tips_temperature <= 0 or self.student_semantic_temperature <= 0:
+            raise ValueError("semantic temperatures must be positive")
+        if self.first_four_loss_weight < 1:
+            raise ValueError("first_four_loss_weight must be at least 1")
+        if self.grounding_context_scale < 0:
+            raise ValueError("grounding_context_scale must be non-negative")
 
     def adapt_to_dataset_features(self, features: dict[str, PolicyFeature]) -> None:
         if not self.infer_from_dataset:
@@ -163,8 +212,11 @@ class TIPSGroundVLAConfig(PreTrainedConfig):
 
     @property
     def observation_delta_indices(self):
-        # Four causal observations from the same episode for recurrent-memory training.
-        return [-3, -2, -1, 0]
+        if not self.use_temporal_memory:
+            return [0]
+        # Four causal observations. A stride of four matches the normal
+        # four-action closed-loop execution cadence; one preserves v3.1/v3.2.
+        return [-3 * self.memory_stride, -2 * self.memory_stride, -self.memory_stride, 0]
 
     @property
     def action_delta_indices(self):

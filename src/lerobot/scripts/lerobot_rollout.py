@@ -46,6 +46,16 @@ Usage examples
         --robot.port=/dev/ttyACM0 \\
         --task="pick up cube" --duration=30
 
+    # TIPS-Ground-VLA uses the regular checkpoint interface. Its policy
+    # returns a 32-step chunk and executes four actions before replanning.
+    lerobot-rollout \\
+        --strategy.type=base \\
+        --policy.path=outputs/tips-ground-vla/checkpoints/last/pretrained_model \\
+        --policy.device=cuda \\
+        --robot.type=so101_follower \\
+        --robot.port=/dev/ttyACM0 \\
+        --task="pick up the red block" --duration=60
+
     # Interactive session: the robot stays idle until /start is typed, then /subtask,
     # /vqa, /autosteer, /reset and /stop drive the run from stdin. With
     # --strategy.type=sentry it also records, labeling frames with their task.

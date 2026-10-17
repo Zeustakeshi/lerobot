@@ -476,10 +476,13 @@ def train(cfg: TrainPipelineConfig):
             defer_weight_load=defer_weight_load,
         )
 
-    # TIPS-Ground-VLA v3 owns a mandatory offline teacher-preparation stage.
-    # It is deliberately orchestrated by the train command (rather than the
-    # deployable policy) so teachers never become part of model state/runtime.
-    if not cfg.is_reward_model_training and getattr(policy, "name", None) == "tips_ground_vla":
+    # Frozen teachers are used only to prepare a versioned dataset sidecar.
+    # They never become policy parameters or inference dependencies.
+    if (
+        not cfg.is_reward_model_training
+        and getattr(policy, "name", None) == "tips_ground_vla"
+        and (policy.config.lambda_tips or policy.config.lambda_dino)
+    ):
         from lerobot.policies.tips_ground_vla.teacher_pipeline import prepare_teacher_cache
 
         if is_main_process():
@@ -734,9 +737,7 @@ def train(cfg: TrainPipelineConfig):
     if is_main_process():
         progress_description = "Training"
         if policy.config.type == "tips_ground_vla":
-            phase = getattr(policy.config, "training_phase", "joint")
-            phase_label = "Perception pretrain" if phase == "perception" else "Joint policy train"
-            progress_description = f"TIPS-Ground-VLA · Stage 5/5 · {phase_label}"
+            progress_description = "TIPS-Ground-VLA · Action-only training"
         progbar = tqdm(
             total=cfg.steps - step,
             desc=progress_description,
